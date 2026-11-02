@@ -1,9 +1,7 @@
-// Service installation starts rmt at login using the platform's user service manager.
-package main
+// Package service installs the host with the user service manager.
+package service
 
 import (
-	"bytes"
-	"encoding/xml"
 	"errors"
 	"fmt"
 	"net"
@@ -11,55 +9,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 )
 
-// xmlValue escapes a user-controlled path or environment value for a launchd plist.
-func xmlValue(value string) string {
-	var b bytes.Buffer
-	_ = xml.EscapeText(&b, []byte(value))
-	return b.String()
-}
-
-// launchAgent describes an rmt service without inheriting unrelated shell secrets.
-func launchAgent(binary, path, configHome, logPath string) string {
-	configEnv := ""
-	if configHome != "" {
-		configEnv = "<key>XDG_CONFIG_HOME</key><string>" + xmlValue(configHome) + "</string>"
-	}
-	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-<key>Label</key><string>com.rmt.host</string>
-<key>ProgramArguments</key><array><string>%s</string><string>serve</string></array>
-<key>EnvironmentVariables</key><dict><key>PATH</key><string>%s</string>%s</dict>
-<key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
-<key>StandardErrorPath</key><string>%s</string>
-</dict></plist>
-`, xmlValue(binary), xmlValue(path), configEnv, xmlValue(logPath))
-}
-
-// systemdQuote escapes a value for a systemd unit, including specifier expansion.
-func systemdQuote(value string) string { return strconv.Quote(strings.ReplaceAll(value, "%", "%%")) }
-
-// systemdUnit describes a user service using the installed binary and PATH.
-func systemdUnit(binary, path, configHome string) string {
-	configEnv := ""
-	if configHome != "" {
-		configEnv = "Environment=" + systemdQuote("XDG_CONFIG_HOME="+configHome) + "\n"
-	}
-	return fmt.Sprintf("[Unit]\nDescription=rmt agent host\nAfter=network-online.target\n\n[Service]\nExecStart=%s serve\nEnvironment=%s\n%sRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n", systemdQuote(strings.ReplaceAll(binary, "$", "$$")), systemdQuote("PATH="+path), configEnv)
-}
-
-// installService installs and starts a new user service without replacing an existing one.
-func installService() error {
-	s, err := tailnet()
-	if err != nil || ipv4(s.Self) == "" || s.Self.UserID == 0 {
-		return errors.New("connect Tailscale before installing the host service")
-	}
-	conn, err := net.DialTimeout("tcp", net.JoinHostPort(ipv4(s.Self), controlPort), 300*time.Millisecond)
+// Install installs and starts a user service without replacing an existing one.
+// address is the host's control address, used to avoid starting a duplicate.
+func Install(address string) error {
+	conn, err := net.DialTimeout("tcp", address, 300*time.Millisecond)
 	if err == nil {
 		conn.Close()
 		return errors.New("a host is already listening; leave its existing service running")

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Support paired HTTPS over reachable IP networks without requiring Tailscale; retain the existing
+  Tailscale connection path for current users.
+- Organize source by command, host, agent, session, network, and service responsibilities.
 - Authenticate local agent bridges and Codex's loopback WebSocket backend.
 - Restart failed agents independently and include agent errors in host diagnostics.
 - Refuse ambiguous session selection when a device could not be checked.

@@ -1,9 +1,8 @@
-package main
+package rmt
 
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -61,39 +60,5 @@ func TestConfigValidation(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("unexpected config file: %v", err)
-	}
-}
-
-// TestOpenCodeClientNeedsNoLocalWorkspace checks that a client works without ~/dev.
-func TestOpenCodeClientNeedsNoLocalWorkspace(t *testing.T) {
-	home := t.TempDir()
-	bin := filepath.Join(home, "bin")
-	if err := os.Mkdir(bin, 0700); err != nil {
-		t.Fatal(err)
-	}
-	output := filepath.Join(home, "args")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$RMT_TEST_ARGS\"\n"
-	if err := os.WriteFile(filepath.Join(bin, "opencode"), []byte(script), 0700); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("HOME", home)
-	t.Setenv("PATH", bin)
-	t.Setenv("RMT_TEST_ARGS", output)
-	if err := openCode("127.0.0.1", "/other/workspace", nil); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(output)
-	if err != nil || !strings.HasPrefix(string(data), "--server\nhttp://127.0.0.1:") {
-		t.Fatalf("client arguments: %q, %v", data, err)
-	}
-}
-
-// TestHostInfoCompatibility accepts both current and earlier workspace responses.
-func TestHostInfoCompatibility(t *testing.T) {
-	if got := (hostInfo{Dev: "/old"}).workspace(); got != "/old" {
-		t.Fatal(got)
-	}
-	if got := (hostInfo{Workspace: "/new", Dev: "/old"}).workspace(); got != "/new" {
-		t.Fatal(got)
 	}
 }

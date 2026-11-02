@@ -1,5 +1,5 @@
 // Configuration selects the workspace used by an rmt host.
-package main
+package rmt
 
 import (
 	"bytes"
@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -16,6 +18,7 @@ import (
 type config struct {
 	Workspace string   `json:"workspace"`
 	Agents    []string `json:"agents,omitempty"`
+	Listen    string   `json:"listen,omitempty"`
 }
 
 // enabled reports whether a host serves an agent; older configs enable both.
@@ -96,6 +99,13 @@ func readConfig(path, home string) (config, error) {
 			seen[agent] = true
 		}
 	}
+	if c.Listen != "" {
+		_, port, err := net.SplitHostPort(c.Listen)
+		n, parseErr := strconv.Atoi(port)
+		if err != nil || parseErr != nil || n < 1 || n > 65535 {
+			return c, fmt.Errorf("invalid config %s: listen must be an address with a valid port", path)
+		}
+	}
 	return c, nil
 }
 
@@ -114,11 +124,11 @@ func setWorkspace(path, home, value string) error {
 	if err != nil {
 		return err
 	}
-	return saveConfig(path, home, value, c.Agents)
+	return saveConfig(path, home, value, c.Agents, c.Listen)
 }
 
-// saveConfig validates and atomically saves a host workspace and agent selection.
-func saveConfig(path, home, value string, agents []string) error {
+// saveConfig validates and atomically saves host workspace, agents and network settings.
+func saveConfig(path, home, value string, agents []string, listen string) error {
 	if value == "" {
 		return errors.New("workspace cannot be empty")
 	}
@@ -151,7 +161,14 @@ func saveConfig(path, home, value string, agents []string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(config{Workspace: workspace, Agents: agents}, "", "  ")
+	if listen != "" {
+		_, port, err := net.SplitHostPort(listen)
+		n, parseErr := strconv.Atoi(port)
+		if err != nil || parseErr != nil || n < 1 || n > 65535 {
+			return errors.New("listen must be an address with a valid port")
+		}
+	}
+	data, err := json.MarshalIndent(config{Workspace: workspace, Agents: agents, Listen: listen}, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -188,7 +205,11 @@ func configCommand(args []string) error {
 		if agents == nil {
 			agents = []string{"opencode", "codex"}
 		}
-		fmt.Printf("workspace: %s\nagents:    %s\nconfig:    %s\n", c.Workspace, strings.Join(agents, ", "), path)
+		listen := c.Listen
+		if listen == "" {
+			listen = "off"
+		}
+		fmt.Printf("workspace: %s\nagents:    %s\nlisten:    %s\nconfig:    %s\n", c.Workspace, strings.Join(agents, ", "), listen, path)
 		return nil
 	}
 	if len(args) != 2 || args[0] != "set" {

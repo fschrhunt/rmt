@@ -1,17 +1,13 @@
-// Session discovery reads native agent histories without creating a second session store.
-package main
+package rmt
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -21,7 +17,7 @@ import (
 	"unicode"
 
 	"github.com/coder/websocket"
-	"github.com/coder/websocket/wsjson"
+	"github.com/fschrhunt/rmt/src/network"
 )
 
 // session identifies a native conversation and the host workspace it belongs to.
@@ -36,56 +32,12 @@ type session struct {
 	Updated int64
 }
 
-// Keep this list unchanged: its order and length determine existing session handles.
-var animals = [...]string{
-	"fox", "bird", "bear", "wolf", "frog", "deer", "duck", "goat", "hare", "hawk",
-	"lion", "lynx", "mole", "moth", "puma", "seal", "swan", "toad", "wasp", "boar",
-	"crab", "crow", "dove", "fish", "goose", "gull", "ibis", "koala", "lemur", "llama",
-	"moose", "mouse", "newt", "okapi", "otter", "panda", "pike", "quail", "quokka", "raven",
-	"shark", "sheep", "skunk", "snail", "snake", "squid", "stork", "tapir", "tiger", "trout",
-	"tuna", "turkey", "viper", "whale", "zebra", "eagle", "finch", "gecko", "heron", "horse",
-}
-
-// sessionWords returns stable animal words for a native session and its collision fallback.
-func sessionWords(agent, id string) []string {
-	sum := sha256.Sum256([]byte(agent + "\x00" + id))
-	words := make([]string, len(sum))
-	for i, b := range sum {
-		words[i] = animals[int(b)%len(animals)]
-	}
-	return words
-}
-
-// sessionName gives a native session a stable animal handle.
-func sessionName(agent, id string) string {
-	return sessionWords(agent, id)[0]
-}
-
-// previousSessionName preserves the earlier six-character alphanumeric handles.
-func previousSessionName(agent, id string) string {
-	shortAnimals := [...]string{"ant", "bat", "bee", "cat", "cod", "cow", "dog", "eel", "elk", "emu", "fox", "gnu", "hen", "hog", "jay", "koi", "owl", "pig", "pug", "ram", "rat", "yak"}
-	const alphabet = "23456789abcdefghjkmnpqrstuvwxyz"
-	sum := sha256.Sum256([]byte(agent + "\x00" + id))
-	return shortAnimals[int(sum[0])%len(shortAnimals)] + string([]byte{
-		alphabet[int(sum[1])%len(alphabet)],
-		alphabet[int(sum[2])%len(alphabet)],
-		alphabet[int(sum[3])%len(alphabet)],
-	})
-}
-
-// legacySessionName preserves handles produced before short animal names.
-func legacySessionName(agent, id string) string {
-	dogs := [...]string{"akita", "beagle", "collie", "corgi", "dingo", "finn", "husky", "jindo", "labrador", "milo", "poodle", "pug", "retriever", "shiba", "terrier", "whippet"}
-	sum := sha256.Sum256([]byte(agent + "\x00" + id))
-	return dogs[int(sum[0])%len(dogs)] + "-" + hex.EncodeToString(sum[1:5])
-}
-
 // insideWorkspace accepts only the host workspace or a directory below it.
-func insideWorkspace(dev, dir string) bool {
-	if !filepath.IsAbs(dev) || !filepath.IsAbs(dir) {
+func insideWorkspace(workspace, dir string) bool {
+	if !filepath.IsAbs(workspace) || !filepath.IsAbs(dir) {
 		return false
 	}
-	rel, err := filepath.Rel(filepath.Clean(dev), filepath.Clean(dir))
+	rel, err := filepath.Rel(filepath.Clean(workspace), filepath.Clean(dir))
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
@@ -106,151 +58,16 @@ func jsonGet(ctx context.Context, client *http.Client, address string, out any) 
 	return json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(out)
 }
 
-// openCodeSessions lists saved root sessions and active drains on one backend.
-func openCodeSessions(ctx context.Context, client *http.Client, base, host, dev string) ([]session, error) {
-	var active struct {
-		Data map[string]json.RawMessage `json:"data"`
-	}
-	if err := jsonGet(ctx, client, base+"/api/session/active", &active); err != nil {
-		return nil, fmt.Errorf("active sessions: %w", err)
-	}
-	var sessions []session
-	cursor := ""
-	seen := make(map[string]bool)
-	for {
-		q := url.Values{"limit": {"100"}, "parentID": {"null"}, "archived": {"false"}}
-		if cursor != "" {
-			q.Set("cursor", cursor)
-		}
-		var page struct {
-			Data []struct {
-				ID    string `json:"id"`
-				Title string `json:"title"`
-				Time  struct {
-					Updated int64 `json:"updated"`
-				} `json:"time"`
-				Location struct {
-					Directory string `json:"directory"`
-				} `json:"location"`
-			} `json:"data"`
-			Cursor struct {
-				Next string `json:"next"`
-			} `json:"cursor"`
-		}
-		if err := jsonGet(ctx, client, base+"/api/session?"+q.Encode(), &page); err != nil {
-			return nil, err
-		}
-		for _, v := range page.Data {
-			if v.ID == "" || !insideWorkspace(dev, v.Location.Directory) {
-				continue
-			}
-			_, isActive := active.Data[v.ID]
-			sessions = append(sessions, session{Name: sessionName("opencode", v.ID), Host: host, Agent: "opencode", ID: v.ID, Dir: v.Location.Directory, Title: v.Title, Active: isActive, Updated: v.Time.Updated / 1000})
-		}
-		if len(page.Data) == 0 || page.Cursor.Next == "" {
-			break
-		}
-		if seen[page.Cursor.Next] {
-			return nil, errors.New("OpenCode repeated a session cursor")
-		}
-		seen[page.Cursor.Next] = true
-		cursor = page.Cursor.Next
-	}
-	return sessions, nil
-}
-
-// rpc sends a request and waits for its matching response, ignoring notifications.
-func rpc(ctx context.Context, conn *websocket.Conn, id int, method string, params any, result any) error {
-	if err := wsjson.Write(ctx, conn, map[string]any{"id": id, "method": method, "params": params}); err != nil {
-		return err
-	}
-	for {
-		var msg struct {
-			ID     *int            `json:"id"`
-			Result json.RawMessage `json:"result"`
-			Error  *struct {
-				Message string `json:"message"`
-			} `json:"error"`
-		}
-		if err := wsjson.Read(ctx, conn, &msg); err != nil {
-			return err
-		}
-		if msg.ID == nil || *msg.ID != id {
-			continue
-		}
-		if msg.Error != nil {
-			return errors.New(msg.Error.Message)
-		}
-		return json.Unmarshal(msg.Result, result)
-	}
-}
-
-// codexSessions lists saved Codex threads in the host workspace.
-func codexSessions(ctx context.Context, address, host, dev string) ([]session, error) {
-	conn, _, err := websocket.Dial(ctx, address, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer conn.CloseNow()
-	conn.SetReadLimit(8 << 20)
-	var initialized json.RawMessage
-	if err = rpc(ctx, conn, 1, "initialize", map[string]any{"clientInfo": map[string]string{"name": "rmt", "title": "rmt", "version": "0.1.0"}}, &initialized); err != nil {
-		return nil, fmt.Errorf("initialize: %w", err)
-	}
-	if err = wsjson.Write(ctx, conn, map[string]any{"method": "initialized", "params": map[string]any{}}); err != nil {
-		return nil, err
-	}
-	var sessions []session
-	var cursor string
-	seen := make(map[string]bool)
-	for {
-		params := map[string]any{"limit": 100, "sortKey": "updated_at", "modelProviders": []string{}, "sourceKinds": []string{"cli", "vscode", "appServer"}}
-		if cursor != "" {
-			params["cursor"] = cursor
-		}
-		var page struct {
-			Data []struct {
-				ID      string `json:"id"`
-				Cwd     string `json:"cwd"`
-				Name    string `json:"name"`
-				Preview string `json:"preview"`
-				Updated int64  `json:"updatedAt"`
-				Status  struct {
-					Type string `json:"type"`
-				} `json:"status"`
-			} `json:"data"`
-			NextCursor string `json:"nextCursor"`
-		}
-		if err = rpc(ctx, conn, 2, "thread/list", params, &page); err != nil {
-			return nil, fmt.Errorf("thread/list: %w", err)
-		}
-		for _, v := range page.Data {
-			if v.ID == "" || !insideWorkspace(dev, v.Cwd) {
-				continue
-			}
-			title := v.Name
-			if title == "" {
-				title = v.Preview
-			}
-			sessions = append(sessions, session{Name: sessionName("codex", v.ID), Host: host, Agent: "codex", ID: v.ID, Dir: v.Cwd, Title: title, Active: v.Status.Type == "active", Updated: v.Updated})
-		}
-		if page.NextCursor == "" {
-			break
-		}
-		if seen[page.NextCursor] {
-			return nil, errors.New("Codex repeated a thread cursor")
-		}
-		seen[page.NextCursor] = true
-		cursor = page.NextCursor
-	}
-	return sessions, nil
-}
-
 // hostSessions queries both backends independently so one failure does not hide the other.
 func hostSessions(ctx context.Context, host, ip string) ([]session, []error, bool) {
 	client := &http.Client{Timeout: 3 * time.Second}
-	var info hostInfo
 	base := "http://" + net.JoinHostPort(ip, controlPort)
+	return hostSessionsAt(ctx, host, client, base, "http://"+net.JoinHostPort(ip, openCodePort), "ws://"+net.JoinHostPort(ip, codexPort), nil)
+}
+
+// hostSessionsAt queries a host over either the paired or legacy transport.
+func hostSessionsAt(ctx context.Context, host string, client *http.Client, base, openCodeURL, codexURL string, ws *websocket.DialOptions) ([]session, []error, bool) {
+	var info hostInfo
 	if err := jsonGet(ctx, client, base+"/info", &info); err != nil {
 		return nil, []error{fmt.Errorf("%s: host service unavailable: %w", host, err)}, false
 	}
@@ -260,7 +77,7 @@ func hostSessions(ctx context.Context, host, ip string) ([]session, []error, boo
 	var sessions []session
 	var errs []error
 	if (config{Agents: info.Agents}).enabled("opencode") {
-		op, err := openCodeSessions(ctx, client, "http://"+net.JoinHostPort(ip, openCodePort), host, info.workspace())
+		op, err := openCodeSessions(ctx, client, openCodeURL, host, info.workspace())
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s opencode: %w", host, err))
 		} else {
@@ -268,7 +85,7 @@ func hostSessions(ctx context.Context, host, ip string) ([]session, []error, boo
 		}
 	}
 	if (config{Agents: info.Agents}).enabled("codex") {
-		codex, err := codexSessions(ctx, "ws://"+net.JoinHostPort(ip, codexPort), host, info.workspace())
+		codex, err := codexSessions(ctx, codexURL, host, info.workspace(), ws)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s codex: %w", host, err))
 		} else {
@@ -279,8 +96,8 @@ func hostSessions(ctx context.Context, host, ip string) ([]session, []error, boo
 }
 
 // discoverSessions scans supported devices and reports whether every eligible device was checked.
-func discoverSessions(s status, hostFilter string) ([]session, []error, bool) {
-	nodes := []node{s.Self}
+func discoverSessions(s network.Status, hostFilter string, excluded map[string]network.Profile) ([]session, []error, bool) {
+	nodes := []network.Node{s.Self}
 	for _, n := range s.Peer {
 		nodes = append(nodes, n)
 	}
@@ -290,6 +107,9 @@ func discoverSessions(s status, hostFilter string) ([]session, []error, bool) {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	for _, n := range nodes {
+		if _, ok := excluded[strings.ToLower(n.HostName)]; ok {
+			continue
+		}
 		if n.UserID != s.Self.UserID || n.UserID == 0 || (hostFilter != "" && !strings.EqualFold(n.HostName, hostFilter)) {
 			continue
 		}
@@ -303,7 +123,7 @@ func discoverSessions(s status, hostFilter string) ([]session, []error, bool) {
 			mu.Unlock()
 			continue
 		}
-		ip := ipv4(n)
+		ip := network.IPv4(n)
 		if ip == "" {
 			mu.Lock()
 			complete = false
@@ -312,7 +132,7 @@ func discoverSessions(s status, hostFilter string) ([]session, []error, bool) {
 			continue
 		}
 		wg.Add(1)
-		go func(n node, ip string) {
+		go func(n network.Node, ip string) {
 			defer wg.Done()
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
@@ -342,6 +162,89 @@ func discoverSessions(s status, hostFilter string) ([]session, []error, bool) {
 		return sessions[i].Name < sessions[j].Name
 	})
 	return sessions, errs, complete
+}
+
+// scanSessions checks paired hosts and, when available, legacy Tailscale devices.
+func scanSessions(hostFilter string) ([]session, []error, bool, error) {
+	dir, err := networkDir()
+	if err != nil {
+		return nil, nil, false, err
+	}
+	profiles, err := network.Profiles(dir)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	var sessions []session
+	var problems []error
+	complete := true
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for name, profile := range profiles {
+		if hostFilter != "" && !strings.EqualFold(name, hostFilter) {
+			continue
+		}
+		wg.Add(1)
+		go func(name string, profile network.Profile) {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			client, err := profile.Client()
+			var found []session
+			var errs []error
+			available := false
+			if err != nil {
+				errs = []error{fmt.Errorf("%s: %w", name, err)}
+			} else {
+				defer client.CloseIdleConnections()
+				wsClient := *client
+				wsClient.Timeout = 0
+				wsURL := "wss://" + strings.TrimPrefix(profile.URL, "https://") + "/codex/"
+				found, errs, available = hostSessionsAt(ctx, name, client, profile.URL, profile.URL+"/opencode", wsURL, &websocket.DialOptions{HTTPClient: &wsClient})
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			sessions = append(sessions, found...)
+			problems = append(problems, errs...)
+			if !available || len(errs) > 0 {
+				complete = false
+			}
+		}(name, profile)
+	}
+	wg.Wait()
+	_, pairedHost := profiles[strings.ToLower(hostFilter)]
+	if hostFilter == "" || !pairedHost {
+		s, tailErr := network.Tailscale()
+		if tailErr != nil {
+			if len(profiles) == 0 || hostFilter != "" {
+				return nil, nil, false, fmt.Errorf("no paired host or Tailscale connection: %w", tailErr)
+			}
+		} else {
+			if hostFilter != "" {
+				if _, err := network.Resolve(s, hostFilter); err != nil {
+					return nil, nil, false, err
+				}
+			}
+			found, errs, ok := discoverSessions(s, hostFilter, profiles)
+			sessions = append(sessions, found...)
+			problems = append(problems, errs...)
+			if !ok {
+				complete = false
+			}
+		}
+	}
+	sort.Slice(sessions, func(i, j int) bool {
+		if sessions[i].Updated != sessions[j].Updated {
+			return sessions[i].Updated > sessions[j].Updated
+		}
+		if sessions[i].Host != sessions[j].Host {
+			return sessions[i].Host < sessions[j].Host
+		}
+		if sessions[i].Agent != sessions[j].Agent {
+			return sessions[i].Agent < sessions[j].Agent
+		}
+		return sessions[i].Name < sessions[j].Name
+	})
+	return sessions, problems, complete, nil
 }
 
 // safeTitle makes session titles single-line and bounded for terminal output.
@@ -419,16 +322,10 @@ func collisionReference(target session, sessions []session) string {
 
 // listSessions prints native sessions and warns when some hosts could not be scanned.
 func listSessions(host string) error {
-	s, err := tailnet()
+	sessions, problems, _, err := scanSessions(host)
 	if err != nil {
 		return err
 	}
-	if host != "" {
-		if _, err = resolve(s, host); err != nil {
-			return err
-		}
-	}
-	sessions, problems, _ := discoverSessions(s, host)
 	if len(sessions) == 0 {
 		fmt.Println("No sessions found in workspaces on reachable hosts.")
 	} else {
@@ -488,16 +385,10 @@ func selectScanned(sessions []session, complete bool, name, host, agent string) 
 
 // findSession resolves an exact handle without choosing arbitrarily among collisions.
 func findSession(name, host, agent string) (session, error) {
-	s, err := tailnet()
+	sessions, problems, complete, err := scanSessions(host)
 	if err != nil {
 		return session{}, err
 	}
-	if host != "" {
-		if _, err = resolve(s, host); err != nil {
-			return session{}, err
-		}
-	}
-	sessions, problems, complete := discoverSessions(s, host)
 	for _, err := range problems {
 		fmt.Fprintln(os.Stderr, "rmt:", err)
 	}

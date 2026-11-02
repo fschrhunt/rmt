@@ -1,7 +1,8 @@
 # rmt
 
 Run the native OpenCode or Codex terminal interface locally while the agent works on another
-Tailscale device you own. The interface is local; there is no remote terminal or SSH in the session.
+device you own. Connect over a reachable LAN, VPN, or forwarded address. The interface is local;
+there is no remote terminal or SSH in the session.
 
 ```sh
 rmt mini opencode
@@ -22,13 +23,12 @@ install -m 755 dist/rmt "$HOME/.local/bin/rmt"
 ```
 
 Some systems already have a different `rmt` program; make sure `~/.local/bin` comes first on PATH.
-Both devices need Tailscale and the selected agent installed. OpenCode requires v2; Codex must
-support `app-server --ws-auth capability-token` and `--ws-token-sha256`. Devices must belong to
-the same Tailscale user, and the tailnet policy must permit TCP ports 47470–47472 between them.
+Both devices need the selected agent installed. OpenCode requires v2; Codex must support
+`app-server --ws-auth capability-token`, `--ws-token-sha256`, and `--remote-auth-token-env`.
 
-On each host, run interactive setup to choose the workspace and which agents to serve. It checks
-for Tailscale and the agent executables, can start their native sign-in flows, and offers to install
-and start a per-user host service on macOS or Linux:
+On each host, run interactive setup to choose the workspace, agents, and whether to allow paired
+HTTPS connections. It checks for the agent executables, can start their native sign-in flows, and
+offers to install and start a per-user host service on macOS or Linux:
 
 ```sh
 rmt setup
@@ -41,6 +41,61 @@ when `XDG_CONFIG_HOME` is unset. No config file is created until settings are sa
 already running host service when it is safe to apply changed settings. Setup never replaces an
 existing service; use `rmt serve` to run a host manually. Only one host service can use the ports
 on a device at a time. The service uses the `rmt` executable and PATH present during setup.
+
+You can also edit the host config directly. For example:
+
+```json
+{
+  "workspace": "~/dev",
+  "agents": ["opencode", "codex"],
+  "listen": "0.0.0.0:47473"
+}
+```
+
+`workspace` must exist. Choose at least one supported agent; omitting `agents` enables both.
+Omitting `listen` disables paired HTTPS. The host reads settings when it starts, so restart its
+service when safe after editing. The legacy Tailscale ports and pairing-code lifetime are fixed.
+
+## Pair devices
+
+When prompted by `rmt setup`, enable paired HTTPS. The default listener is `0.0.0.0:47473`;
+choose a different bind address or port if needed. Once the host service is running, generate a
+single-use code on the host:
+
+```sh
+rmt code
+```
+
+On the client, pair a name with the host's reachable address:
+
+```sh
+rmt pair mini https://HOST:47473
+rmt mini opencode
+```
+
+Compare the certificate fingerprint shown on the client with `rmt code` on the host before
+accepting it, then enter the code. The code expires after 15 minutes and is valid for one device.
+Keep it private. `rmt code` creates a new code without restarting the host or its agents. The
+host's identity and paired-device registry, and the client's host credentials, are stored in
+owner-only files beside the rmt config. Back up the host identity if it needs to stay trusted.
+
+On a client, `hosts.json` contains paired names, addresses, certificate fingerprints, and device
+tokens. You can edit a host's `url` if its address changes; keep its verified fingerprint and
+token unchanged. Treat this file as a secret. On a host, `identity.pem` contains its private TLS
+identity and `devices.json` holds paired-device token hashes. Keep those files private; use the
+commands below to manage devices.
+
+Use `rmt hosts` to list local paired hosts and `rmt unpair mini` to remove a local profile.
+Removing a profile does not revoke access on the host. On the host, `rmt devices` lists paired
+clients and `rmt revoke <device-id>` revokes one and closes its active connections.
+
+The address must already be reachable and the host's firewall must allow the chosen TCP port.
+Pairing does not set up NAT traversal, a relay, or firewall rules. You can use a LAN address,
+DNS name, Tailscale address, another VPN, or a securely forwarded address without changing rmt.
+
+Existing Tailscale setups continue to work without pairing: devices must belong to the same
+Tailscale user and their tailnet policy must permit TCP ports 47470–47472. A paired host name
+takes precedence if it matches a Tailscale device name.
 
 On macOS the installed service writes diagnostics to `~/Library/Logs/rmt/host.log`; on Linux use
 `journalctl --user -u rmt.service`. Agent error output is included and may contain sensitive
@@ -76,11 +131,12 @@ Closing the local window disconnects the client; it does not stop the host servi
 explicit interrupt can stop it. A host or service restart stops the backend; session history and
 resume behavior remain subject to the agent. Automatic reconnect is not implemented.
 
-Traffic is restricted to Tailscale, and requests are checked against the host owner's Tailscale
-user identity. Agent backends listen on loopback with per-start credentials. OpenCode resolves its
-starting directory on the client, so a temporary localhost bridge maps the client's current directory to the host workspace.
-Other paths are passed through unchanged. The authenticated bridge exists only while the OpenCode
-client runs. An agent that exits is restarted independently without stopping the other agent.
+Paired connections use TLS pinned to the verified host certificate and a separate credential per
+device. The optional legacy Tailscale listeners authenticate requests against the host owner's
+Tailscale identity. Agent backends listen on loopback with per-start credentials. Native client
+bridges run locally with separate credentials while their client is open. OpenCode's bridge maps
+the client's current directory to the host workspace; other paths pass through unchanged. An agent
+that exits is restarted independently without stopping the other agent.
 
 The workspace is a starting location, not a security sandbox. Agent permissions and sandbox settings
 still apply. Codex's remote app-server transport is experimental. Claude Code is not supported.

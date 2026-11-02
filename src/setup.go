@@ -1,5 +1,5 @@
 // Setup guides a user through configuring this machine as an agent host.
-package main
+package rmt
 
 import (
 	"bufio"
@@ -7,14 +7,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/fschrhunt/rmt/src/network"
+	"github.com/fschrhunt/rmt/src/service"
 )
 
-// setup asks for a workspace and agents, saves them, and offers native sign-in.
+// setup configures a workspace, agents and networking, then offers sign-in and a service.
 func setup(input io.Reader, output io.Writer) error {
 	path, home, err := configPath()
 	if err != nil {
@@ -35,8 +39,10 @@ func setup(input io.Reader, output io.Writer) error {
 	}
 	fmt.Fprintln(output, "Set up rmt on this machine")
 	fmt.Fprintln(output)
-	if s, err := tailnet(); err != nil || ipv4(s.Self) == "" || s.Self.UserID == 0 {
-		fmt.Fprintln(output, "Tailscale: not connected or unavailable (connect it before starting the host)")
+	s, tailErr := network.Tailscale()
+	tailscaleAvailable := tailErr == nil && network.IPv4(s.Self) != "" && s.Self.UserID != 0
+	if !tailscaleAvailable {
+		fmt.Fprintln(output, "Tailscale: not connected or unavailable (optional with paired HTTPS)")
 	} else {
 		fmt.Fprintf(output, "Tailscale: connected as %s\n", s.Self.HostName)
 	}
@@ -116,20 +122,53 @@ func setup(input io.Reader, output io.Writer) error {
 		}
 		break
 	}
+	listen := current.Listen
+	defaultDirect := "N"
+	if listen != "" || !tailscaleAvailable {
+		defaultDirect = "Y"
+	}
+	prompt := "Allow paired HTTPS connections on any reachable network? [y/N]: "
+	if defaultDirect == "Y" {
+		prompt = "Allow paired HTTPS connections on any reachable network? [Y/n]: "
+	}
+	answer, err := ask(prompt)
+	if err != nil {
+		return err
+	}
+	if answer == "" {
+		answer = defaultDirect
+	}
+	if strings.EqualFold(answer, "y") || strings.EqualFold(answer, "yes") {
+		if listen == "" {
+			listen = "0.0.0.0:47473"
+		}
+		value, err := ask(fmt.Sprintf("Listen address [%s]: ", listen))
+		if err != nil {
+			return err
+		}
+		if value != "" {
+			listen = value
+		}
+	} else {
+		listen = ""
+	}
 	fmt.Fprintf(output, "\nWorkspace: %s\nAgents:    %s\nConfig:    %s\n", workspace, strings.Join(agents, ", "), path)
+	if listen != "" {
+		fmt.Fprintf(output, "Network:   paired HTTPS on %s\n", listen)
+	}
 	for _, agent := range agents {
 		if !installed[agent] {
 			fmt.Fprintf(output, "%s must be installed before starting the host.\n", agent)
 		}
 	}
-	answer, err := ask("Save these settings? [Y/n]: ")
+	answer, err = ask("Save these settings? [Y/n]: ")
 	if err != nil {
 		return err
 	}
 	if answer != "" && !strings.EqualFold(answer, "y") && !strings.EqualFold(answer, "yes") {
 		return errors.New("setup cancelled; configuration was not saved")
 	}
-	if err := saveConfig(path, home, workspace, agents); err != nil {
+	if err := saveConfig(path, home, workspace, agents, listen); err != nil {
 		return err
 	}
 	fmt.Fprintln(output, "\nSettings saved. Start with 'rmt serve', or restart the existing host service when it is safe.")
@@ -162,10 +201,30 @@ func setup(input io.Reader, output io.Writer) error {
 	}
 	answer, err = ask("Install and start a host service for this user? [y/N]: ")
 	if err == nil && (strings.EqualFold(answer, "y") || strings.EqualFold(answer, "yes")) {
-		if err := installService(); err != nil {
+		address := ""
+		if listen != "" {
+			host, port, _ := net.SplitHostPort(listen)
+			if host == "" || host == "0.0.0.0" {
+				host = "127.0.0.1"
+			}
+			if host == "::" {
+				host = "::1"
+			}
+			address = net.JoinHostPort(host, port)
+		} else {
+			s, err := network.Tailscale()
+			if err != nil || network.IPv4(s.Self) == "" || s.Self.UserID == 0 {
+				return errors.New("settings saved; configure a network before installing the host service")
+			}
+			address = net.JoinHostPort(network.IPv4(s.Self), controlPort)
+		}
+		if err := service.Install(address); err != nil {
 			return fmt.Errorf("settings saved; could not install host service: %w", err)
 		}
 		fmt.Fprintln(output, "Host service installed and start requested.")
+	}
+	if listen != "" {
+		fmt.Fprintln(output, "On this host, run 'rmt code'; on your client, run 'rmt pair <name> https://<host>:<port>'.")
 	}
 	fmt.Fprintln(output, "Connect from another device with: rmt <this-host> <agent>")
 	return nil

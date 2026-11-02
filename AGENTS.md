@@ -1,6 +1,6 @@
 # Developing rmt
 
-rmt connects native agent terminals to backends on another Tailscale device. It is a small Go
+rmt connects native agent terminals to backends on another device. It is a small Go
 program; keep native agent interfaces intact, preserve running work and credentials, and avoid
 configuration or abstractions beyond what a change needs.
 
@@ -16,10 +16,13 @@ configuration or abstractions beyond what a change needs.
 
 ## Where things live
 
-- `main.go`: host, native clients, proxy and Tailscale authentication.
-- `sessions.go`: discovery, animal handles and reconnect selection.
-- `config.go`, `setup.go` and `service.go`: host configuration, interactive setup and services.
-- `*_test.go`: offline behavior tests with fake agents and Tailscale responses.
+- `main.go`: command entry point.
+- `src/cli.go`, `src/host.go` and `src/connect.go`: command dispatch, host lifecycle and clients.
+- `src/session.go`, `src/name.go`, `src/opencode.go` and `src/codex.go`: sessions and native agents.
+- `src/config.go`, `src/setup.go` and `src/pair.go`: configuration and interactive setup.
+- `src/network/`: paired HTTPS, private device credentials and optional Tailscale integration.
+- `src/service/`: macOS and Linux user service installation.
+- `*_test.go`: offline behavior tests next to the code they cover.
 - `README.md`: installation, usage, security boundaries and operational limitations.
 
 ## Conventions

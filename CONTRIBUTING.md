@@ -13,6 +13,9 @@ require a Tailscale connection, real agents, or model credentials.
 `./x` defaults to `check`. Run `./x help` for the other commands. Use `./x dev` to run this
 checkout. Rebuilding does not restart an installed host service.
 
+The root `main.go` starts the command; implementation and tests live in `src/`. See
+[AGENTS.md](AGENTS.md) for the file map and development conventions.
+
 Tests should protect meaningful behavior and run offline. Never include credentials, prompts,
 or other private data in issue reports. Update the README and changelog when behavior changes.
 
