@@ -1,5 +1,6 @@
 /remote
 /remote.log
+/rmt
 /dist/
 *.log
 .DS_Store

@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // TestResolveRequiresAnOwnedOnlineDevice protects the host selection boundary.
@@ -18,6 +21,49 @@ func TestResolveRequiresAnOwnedOnlineDevice(t *testing.T) {
 		if _, e := resolve(s, name); e == nil {
 			t.Errorf("resolved %s", name)
 		}
+	}
+}
+
+// TestAgentSupervisionIsIndependent keeps a healthy backend alive while another restarts.
+func TestAgentSupervisionIsIndependent(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	dir := t.TempDir()
+	crashes := filepath.Join(dir, "crashes")
+	healthy := filepath.Join(dir, "healthy")
+	done := make(chan struct{}, 2)
+	go func() {
+		superviseAgent(ctx, "crashing-test", func() *exec.Cmd {
+			c := exec.CommandContext(ctx, "/bin/sh", "-c", `printf x >> "$TEST_PATH"; exit 1`)
+			c.Env = append(os.Environ(), "TEST_PATH="+crashes)
+			return c
+		})
+		done <- struct{}{}
+	}()
+	go func() {
+		superviseAgent(ctx, "healthy-test", func() *exec.Cmd {
+			c := exec.CommandContext(ctx, "/bin/sh", "-c", `printf x >> "$TEST_PATH"; exec /bin/sleep 10`)
+			c.Env = append(os.Environ(), "TEST_PATH="+healthy)
+			return c
+		})
+		done <- struct{}{}
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		crashed, _ := os.ReadFile(crashes)
+		started, _ := os.ReadFile(healthy)
+		if len(crashed) >= 2 && len(started) == 1 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	crashed, _ := os.ReadFile(crashes)
+	started, _ := os.ReadFile(healthy)
+	cancel()
+	<-done
+	<-done
+	if len(crashed) < 2 || len(started) != 1 {
+		t.Fatalf("crashing starts %d, healthy starts %d", len(crashed), len(started))
 	}
 }
 
@@ -67,6 +113,33 @@ func TestSameUserUsesTailscaleIdentity(t *testing.T) {
 		h.ServeHTTP(w, r)
 		if w.Code != tc.want {
 			t.Errorf("%s: got %d, want %d", tc.ip, w.Code, tc.want)
+		}
+	}
+}
+
+// TestLocalBridgeRequiresAuthentication protects the remote agent from other local clients.
+func TestLocalBridgeRequiresAuthentication(t *testing.T) {
+	reached := false
+	h := localBridge(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		if r.Header.Get("Authorization") != "" {
+			t.Error("local credentials forwarded upstream")
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}), "secret")
+	for _, tc := range []struct {
+		user, pass string
+		want       int
+	}{{"", "", 401}, {"opencode", "wrong", 401}, {"other", "secret", 401}, {"opencode", "secret", 204}} {
+		r := httptest.NewRequest("GET", "http://localhost/", nil)
+		if tc.user != "" {
+			r.SetBasicAuth(tc.user, tc.pass)
+		}
+		w := httptest.NewRecorder()
+		reached = false
+		h.ServeHTTP(w, r)
+		if w.Code != tc.want || reached != (tc.want == 204) {
+			t.Fatalf("user %q: status %d, reached %v", tc.user, w.Code, reached)
 		}
 	}
 }

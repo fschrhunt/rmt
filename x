@@ -11,7 +11,7 @@ usage: ./x [command] [args...]
   fmt [--check]   Format Go files, or check formatting without changes
   lint            Run go vet
   test [args...]  Run go test (default: ./...)
-  build           Build dist/remote without replacing the installed binary
+  build           Build dist/rmt without replacing the installed binary
   dev [args...]   Run this checkout with go run
   hooks           Install the repository's Git hook
   help            Show this help
@@ -41,7 +41,7 @@ case "$command" in
         ;;
     lint) go vet ./... ;;
     test) if [ "$#" -eq 0 ]; then set -- ./...; fi; go test "$@" ;;
-    build) mkdir -p dist; go build -o dist/remote . ;;
+    build) mkdir -p dist; go build -o dist/rmt . ;;
     dev) exec go run . "$@" ;;
     hooks) git config core.hooksPath .githooks; printf 'Git hook installed.\n' ;;
     help|--help|-h) usage ;;
