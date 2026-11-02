@@ -1,4 +1,5 @@
-package rmt
+// Package agent connects native agent interfaces and reads their sessions.
+package agent
 
 import (
 	"context"
@@ -16,6 +17,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"time"
+
+	"github.com/fschrhunt/rmt/src/network"
+	"github.com/fschrhunt/rmt/src/session"
 )
 
 // localBridge limits the local proxy to clients holding this attachment's password.
@@ -41,13 +45,13 @@ func translateLocation(r *http.Request, local, remote string) {
 	}
 }
 
-// openCode starts a workspace-path bridge and runs the unmodified local native UI.
-func openCode(ip, workspace string, extra []string) error {
-	return openCodeAt(&url.URL{Scheme: "http", Host: net.JoinHostPort(ip, openCodePort)}, nil, workspace, extra)
+// OpenCode starts a workspace-path bridge and runs the unmodified local native UI.
+func OpenCode(ip, workspace string, extra []string) error {
+	return OpenCodeAt(&url.URL{Scheme: "http", Host: net.JoinHostPort(ip, network.OpenCodePort)}, nil, workspace, extra)
 }
 
-// openCodeAt runs the native client through a local bridge to a selected host.
-func openCodeAt(target *url.URL, transport http.RoundTripper, workspace string, extra []string) error {
+// OpenCodeAt runs the native client through a local bridge to a selected host.
+func OpenCodeAt(target *url.URL, transport http.RoundTripper, workspace string, extra []string) error {
 	localDir, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("current directory: %w", err)
@@ -88,15 +92,15 @@ func openCodeAt(target *url.URL, transport http.RoundTripper, workspace string, 
 	return c.Run()
 }
 
-// openCodeSessions lists saved root sessions and active drains on one backend.
-func openCodeSessions(ctx context.Context, client *http.Client, base, host, workspace string) ([]session, error) {
+// OpenCodeSessions lists saved root sessions and active drains on one backend.
+func OpenCodeSessions(ctx context.Context, client *http.Client, base, host, workspace string) ([]session.Session, error) {
 	var active struct {
 		Data map[string]json.RawMessage `json:"data"`
 	}
-	if err := jsonGet(ctx, client, base+"/api/session/active", &active); err != nil {
+	if err := network.JSONGet(ctx, client, base+"/api/session/active", &active); err != nil {
 		return nil, fmt.Errorf("active sessions: %w", err)
 	}
-	var sessions []session
+	var sessions []session.Session
 	cursor := ""
 	seen := make(map[string]bool)
 	for {
@@ -119,15 +123,15 @@ func openCodeSessions(ctx context.Context, client *http.Client, base, host, work
 				Next string `json:"next"`
 			} `json:"cursor"`
 		}
-		if err := jsonGet(ctx, client, base+"/api/session?"+q.Encode(), &page); err != nil {
+		if err := network.JSONGet(ctx, client, base+"/api/session?"+q.Encode(), &page); err != nil {
 			return nil, err
 		}
 		for _, v := range page.Data {
-			if v.ID == "" || !insideWorkspace(workspace, v.Location.Directory) {
+			if v.ID == "" || !session.InsideWorkspace(workspace, v.Location.Directory) {
 				continue
 			}
 			_, isActive := active.Data[v.ID]
-			sessions = append(sessions, session{Name: sessionName("opencode", v.ID), Host: host, Agent: "opencode", ID: v.ID, Dir: v.Location.Directory, Title: v.Title, Active: isActive, Updated: v.Time.Updated / 1000})
+			sessions = append(sessions, session.Session{Name: session.Name("opencode", v.ID), Host: host, Agent: "opencode", ID: v.ID, Dir: v.Location.Directory, Title: v.Title, Active: isActive, Updated: v.Time.Updated / 1000})
 		}
 		if len(page.Data) == 0 || page.Cursor.Next == "" {
 			break

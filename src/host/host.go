@@ -1,4 +1,5 @@
-package rmt
+// Package host runs agent backends and their network listeners.
+package host
 
 import (
 	"context"
@@ -10,7 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -23,28 +23,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fschrhunt/rmt/src/config"
 	"github.com/fschrhunt/rmt/src/network"
 )
-
-const (
-	controlPort  = "47470"
-	openCodePort = "47471"
-	codexPort    = "47472"
-)
-
-type hostInfo struct {
-	Workspace string   `json:"workspace,omitempty"`
-	Dev       string   `json:"dev,omitempty"` // Compatibility with older host services.
-	Agents    []string `json:"agents,omitempty"`
-}
-
-// workspace returns the configured host workspace, including for older services.
-func (h hostInfo) workspace() string {
-	if h.Workspace != "" {
-		return h.Workspace
-	}
-	return h.Dev
-}
 
 // freePort chooses an unused loopback port for an agent backend.
 func freePort() (string, error) {
@@ -55,35 +36,6 @@ func freePort() (string, error) {
 	p := fmt.Sprint(l.Addr().(*net.TCPAddr).Port)
 	l.Close()
 	return p, nil
-}
-
-// superviseAgent keeps one backend running without interrupting other agents.
-func superviseAgent(ctx context.Context, name string, command func() *exec.Cmd) {
-	delay := time.Second
-	for ctx.Err() == nil {
-		started := time.Now()
-		cmd := command()
-		cmd.Stdout = io.Discard
-		cmd.Stderr = os.Stderr
-		err := cmd.Run()
-		if ctx.Err() != nil {
-			return
-		}
-		fmt.Fprintf(os.Stderr, "rmt: %s stopped (%v); restarting in %s\n", name, err, delay)
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(delay):
-		}
-		if time.Since(started) > 30*time.Second {
-			delay = time.Second
-		} else if delay < 30*time.Second {
-			delay *= 2
-			if delay > 30*time.Second {
-				delay = 30 * time.Second
-			}
-		}
-	}
 }
 
 // bearerProxy forwards authenticated Tailscale requests to an authenticated backend.
@@ -99,9 +51,9 @@ func bearerProxy(port, token string, basic bool) http.Handler {
 	})
 }
 
-// runHost runs native backends from the configured workspace on the owner's tailnet.
-func runHost() error {
-	cfg, e := loadConfig()
+// Run starts the configured host and its native agent backends.
+func Run() error {
+	cfg, e := config.Load()
 	if e != nil {
 		return e
 	}
@@ -122,7 +74,7 @@ func runHost() error {
 		}
 	}()
 	if legacy {
-		for _, p := range []string{controlPort, openCodePort, codexPort} {
+		for _, p := range []string{network.ControlPort, network.OpenCodePort, network.CodexPort} {
 			l, e := net.Listen("tcp", net.JoinHostPort(ip, p))
 			if e != nil {
 				return fmt.Errorf("listen on %s: %w", p, e)
@@ -133,7 +85,7 @@ func runHost() error {
 	var direct net.Listener
 	var paired *network.Host
 	if cfg.Listen != "" {
-		path, _, err := configPath()
+		path, _, err := config.Path()
 		if err != nil {
 			return err
 		}
@@ -171,7 +123,7 @@ func runHost() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	var agents sync.WaitGroup
 	defer func() { stop(); agents.Wait() }()
-	if cfg.enabled("opencode") {
+	if cfg.Enabled("opencode") {
 		agents.Add(1)
 		go func() {
 			defer agents.Done()
@@ -183,7 +135,7 @@ func runHost() error {
 			})
 		}()
 	}
-	if cfg.enabled("codex") {
+	if cfg.Enabled("codex") {
 		agents.Add(1)
 		go func() {
 			defer agents.Done()
@@ -200,16 +152,16 @@ func runHost() error {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(hostInfo{Workspace: workspace, Dev: workspace, Agents: cfg.Agents})
+		_ = json.NewEncoder(w).Encode(network.Info{Workspace: workspace, Dev: workspace, Agents: cfg.Agents})
 	})
 	disabled := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "agent disabled on host", http.StatusServiceUnavailable)
 	})
 	var opHandler, codexHandler http.Handler = disabled, disabled
-	if cfg.enabled("opencode") {
+	if cfg.Enabled("opencode") {
 		opHandler = bearerProxy(op, password, true)
 	}
-	if cfg.enabled("codex") {
+	if cfg.Enabled("codex") {
 		codexHandler = bearerProxy(cp, password, false)
 	}
 	handlers := []http.Handler{control, opHandler, codexHandler}

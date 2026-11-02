@@ -1,4 +1,4 @@
-package rmt
+package cli
 
 import (
 	"bufio"
@@ -15,12 +15,13 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/fschrhunt/rmt/src/config"
 	"github.com/fschrhunt/rmt/src/network"
 )
 
 // networkDir returns the user's private network identity and profile directory.
 func networkDir() (string, error) {
-	path, _, err := configPath()
+	path, _, err := config.Path()
 	if err != nil {
 		return "", err
 	}

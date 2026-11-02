@@ -1,5 +1,5 @@
-// Configuration selects the workspace used by an rmt host.
-package rmt
+// Package config reads and writes the user's host settings.
+package config
 
 import (
 	"bytes"
@@ -14,15 +14,15 @@ import (
 	"strings"
 )
 
-// config contains the host settings stored in the user's rmt config file.
-type config struct {
+// Config contains the host settings stored in the user's rmt config file.
+type Config struct {
 	Workspace string   `json:"workspace"`
 	Agents    []string `json:"agents,omitempty"`
 	Listen    string   `json:"listen,omitempty"`
 }
 
-// enabled reports whether a host serves an agent; older configs enable both.
-func (c config) enabled(agent string) bool {
+// Enabled reports whether a host serves an agent; older configs enable both.
+func (c Config) Enabled(agent string) bool {
 	if c.Agents == nil {
 		return agent == "opencode" || agent == "codex"
 	}
@@ -34,8 +34,8 @@ func (c config) enabled(agent string) bool {
 	return false
 }
 
-// configPath returns the per-user configuration path and home directory.
-func configPath() (string, string, error) {
+// Path returns the per-user configuration path and home directory.
+func Path() (string, string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return "", "", errors.New("cannot determine home directory")
@@ -50,8 +50,17 @@ func configPath() (string, string, error) {
 	return filepath.Join(root, "rmt", "config.json"), home, nil
 }
 
-// workspacePath resolves an absolute workspace path, expanding the current user's home.
-func workspacePath(value, home string) (string, error) {
+// Dir returns the directory containing the user's rmt configuration.
+func Dir() (string, error) {
+	path, _, err := Path()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Dir(path), nil
+}
+
+// WorkspacePath resolves an absolute workspace path, expanding the current user's home.
+func WorkspacePath(value, home string) (string, error) {
 	if value == "" {
 		return filepath.Join(home, "dev"), nil
 	}
@@ -66,9 +75,9 @@ func workspacePath(value, home string) (string, error) {
 	return filepath.Clean(value), nil
 }
 
-// readConfig loads the host workspace or uses ~/dev when no config file exists.
-func readConfig(path, home string) (config, error) {
-	c := config{}
+// Read loads the host workspace or uses ~/dev when no config file exists.
+func Read(path, home string) (Config, error) {
+	c := Config{}
 	data, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return c, fmt.Errorf("read config: %w", err)
@@ -83,7 +92,7 @@ func readConfig(path, home string) (config, error) {
 			return c, fmt.Errorf("invalid config %s: unexpected trailing data", path)
 		}
 	}
-	c.Workspace, err = workspacePath(c.Workspace, home)
+	c.Workspace, err = WorkspacePath(c.Workspace, home)
 	if err != nil {
 		return c, fmt.Errorf("invalid config %s: %w", path, err)
 	}
@@ -109,26 +118,26 @@ func readConfig(path, home string) (config, error) {
 	return c, nil
 }
 
-// loadConfig reads this user's effective host configuration.
-func loadConfig() (config, error) {
-	path, home, err := configPath()
+// Load reads this user's effective host configuration.
+func Load() (Config, error) {
+	path, home, err := Path()
 	if err != nil {
-		return config{}, err
+		return Config{}, err
 	}
-	return readConfig(path, home)
+	return Read(path, home)
 }
 
-// setWorkspace safely replaces the workspace setting after checking the directory exists.
-func setWorkspace(path, home, value string) error {
-	c, err := readConfig(path, home)
+// SetWorkspace safely replaces the workspace setting after checking the directory exists.
+func SetWorkspace(path, home, value string) error {
+	c, err := Read(path, home)
 	if err != nil {
 		return err
 	}
-	return saveConfig(path, home, value, c.Agents, c.Listen)
+	return Save(path, home, value, c.Agents, c.Listen)
 }
 
-// saveConfig validates and atomically saves host workspace, agents and network settings.
-func saveConfig(path, home, value string, agents []string, listen string) error {
+// Save validates and atomically saves host workspace, agents and network settings.
+func Save(path, home, value string, agents []string, listen string) error {
 	if value == "" {
 		return errors.New("workspace cannot be empty")
 	}
@@ -139,7 +148,7 @@ func saveConfig(path, home, value string, agents []string, listen string) error 
 			return err
 		}
 	}
-	workspace, err := workspacePath(value, home)
+	workspace, err := WorkspacePath(value, home)
 	if err != nil {
 		return err
 	}
@@ -150,7 +159,7 @@ func saveConfig(path, home, value string, agents []string, listen string) error 
 	if !info.IsDir() {
 		return fmt.Errorf("workspace %s is not a directory", workspace)
 	}
-	if _, err := readConfig(path, home); err != nil {
+	if _, err := Read(path, home); err != nil {
 		return err
 	}
 	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
@@ -168,7 +177,7 @@ func saveConfig(path, home, value string, agents []string, listen string) error 
 			return errors.New("listen must be an address with a valid port")
 		}
 	}
-	data, err := json.MarshalIndent(config{Workspace: workspace, Agents: agents, Listen: listen}, "", "  ")
+	data, err := json.MarshalIndent(Config{Workspace: workspace, Agents: agents, Listen: listen}, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -188,40 +197,4 @@ func saveConfig(path, home, value string, agents []string, listen string) error 
 		return err
 	}
 	return os.Rename(file.Name(), path)
-}
-
-// configCommand prints the effective workspace or sets it for the next host start.
-func configCommand(args []string) error {
-	path, home, err := configPath()
-	if err != nil {
-		return err
-	}
-	if len(args) == 0 {
-		c, err := readConfig(path, home)
-		if err != nil {
-			return err
-		}
-		agents := c.Agents
-		if agents == nil {
-			agents = []string{"opencode", "codex"}
-		}
-		listen := c.Listen
-		if listen == "" {
-			listen = "off"
-		}
-		fmt.Printf("workspace: %s\nagents:    %s\nlisten:    %s\nconfig:    %s\n", c.Workspace, strings.Join(agents, ", "), listen, path)
-		return nil
-	}
-	if len(args) != 2 || args[0] != "set" {
-		return errors.New("usage: rmt config [set <workspace>]")
-	}
-	if err := setWorkspace(path, home, args[1]); err != nil {
-		return err
-	}
-	c, err := readConfig(path, home)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("Workspace set to %s. Restart the host service when it is safe to do so.\n", c.Workspace)
-	return nil
 }

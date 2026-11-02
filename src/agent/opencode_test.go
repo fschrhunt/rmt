@@ -1,4 +1,4 @@
-package rmt
+package agent
 
 import (
 	"context"
@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/fschrhunt/rmt/src/session"
 )
 
 // TestTranslateLocation maps only the local startup root, preserving other paths.
@@ -67,7 +69,7 @@ func TestOpenCodeClientNeedsNoLocalWorkspace(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("PATH", bin)
 	t.Setenv("RMT_TEST_ARGS", output)
-	if err := openCode("127.0.0.1", "/other/workspace", nil); err != nil {
+	if err := OpenCode("127.0.0.1", "/other/workspace", nil); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(output)
@@ -93,14 +95,14 @@ func TestOpenCodeSessionsFollowsPagesAndReportsActive(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	got, err := openCodeSessions(context.Background(), srv.Client(), srv.URL, "mini", "/home/me/dev")
+	got, err := OpenCodeSessions(context.Background(), srv.Client(), srv.URL, "mini", "/home/me/dev")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 2 || got[0].ID != "ses_one" || !got[0].Active || got[1].ID != "ses_two" || got[1].Active {
 		t.Fatalf("unexpected sessions: %+v", got)
 	}
-	if got[0].Name != sessionName("opencode", "ses_one") {
+	if got[0].Name != session.Name("opencode", "ses_one") {
 		t.Fatalf("unstable name: %s", got[0].Name)
 	}
 }
