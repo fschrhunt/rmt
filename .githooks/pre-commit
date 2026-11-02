@@ -1,0 +1,13 @@
+#!/bin/sh
+# Reject unformatted staged Go files and vet the working tree before committing.
+set -eu
+staged=$(git diff --cached --name-only --diff-filter=ACMR -- '*.go')
+[ -n "$staged" ] || exit 0
+printf '%s\n' "$staged" | while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    if [ -n "$(git show ":$path" | gofmt -d)" ]; then
+        printf 'pre-commit: format and restage %s\n' "$path" >&2
+        exit 1
+    fi
+done
+go vet ./...
