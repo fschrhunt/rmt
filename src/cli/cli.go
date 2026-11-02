@@ -1,10 +1,14 @@
-// Package rmt connects native agent terminals to workspaces on remote devices.
-package rmt
+// Package cli handles rmt commands and interactive input.
+package cli
 
 import (
 	"fmt"
 	"log"
 	"os"
+
+	"github.com/fschrhunt/rmt/src/client"
+	"github.com/fschrhunt/rmt/src/host"
+	"github.com/fschrhunt/rmt/src/session"
 )
 
 // Main dispatches host, session discovery, and native-client commands.
@@ -42,7 +46,7 @@ func Main() {
 		return
 	}
 	if len(a) == 1 && a[0] == "serve" {
-		if err := runHost(); err != nil {
+		if err := host.Run(); err != nil {
 			log.Fatal("rmt: ", err)
 		}
 		return
@@ -64,7 +68,7 @@ func Main() {
 		if len(a) < 2 {
 			log.Fatal("usage: rmt connect [host/]<name> [agent options...]")
 		}
-		host, name, err := parseSessionReference(a[1])
+		host, name, err := session.ParseReference(a[1])
 		if err != nil {
 			log.Fatal("rmt: ", err)
 		}
@@ -72,7 +76,7 @@ func Main() {
 		if err != nil {
 			log.Fatal("rmt: ", err)
 		}
-		if err = connect(saved.Host, saved.Agent, a[2:], &saved); err != nil {
+		if err = client.Connect(saved.Host, saved.Agent, a[2:], &saved); err != nil {
 			log.Fatal("rmt: ", err)
 		}
 		return
@@ -100,12 +104,12 @@ func Main() {
 		if err != nil {
 			log.Fatal("rmt: ", err)
 		}
-		if err = connect(saved.Host, saved.Agent, a[3:], &saved); err != nil {
+		if err = client.Connect(saved.Host, saved.Agent, a[3:], &saved); err != nil {
 			log.Fatal("rmt: ", err)
 		}
 		return
 	}
-	if err := connect(a[0], a[1], a[2:], nil); err != nil {
+	if err := client.Connect(a[0], a[1], a[2:], nil); err != nil {
 		log.Fatal("rmt: ", err)
 	}
 }

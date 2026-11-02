@@ -1,5 +1,5 @@
 // Setup guides a user through configuring this machine as an agent host.
-package rmt
+package cli
 
 import (
 	"bufio"
@@ -14,17 +14,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fschrhunt/rmt/src/config"
 	"github.com/fschrhunt/rmt/src/network"
 	"github.com/fschrhunt/rmt/src/service"
 )
 
 // setup configures a workspace, agents and networking, then offers sign-in and a service.
 func setup(input io.Reader, output io.Writer) error {
-	path, home, err := configPath()
+	path, home, err := config.Path()
 	if err != nil {
 		return err
 	}
-	current, err := readConfig(path, home)
+	current, err := config.Read(path, home)
 	if err != nil {
 		return err
 	}
@@ -80,7 +81,7 @@ func setup(input io.Reader, output io.Writer) error {
 				return err
 			}
 		}
-		workspace, err = workspacePath(value, home)
+		workspace, err = config.WorkspacePath(value, home)
 		if err != nil {
 			fmt.Fprintln(output, err)
 			continue
@@ -93,10 +94,10 @@ func setup(input io.Reader, output io.Writer) error {
 		break
 	}
 	defaultChoice := "1"
-	if current.enabled("opencode") && !current.enabled("codex") {
+	if current.Enabled("opencode") && !current.Enabled("codex") {
 		defaultChoice = "2"
 	}
-	if !current.enabled("opencode") && current.enabled("codex") {
+	if !current.Enabled("opencode") && current.Enabled("codex") {
 		defaultChoice = "3"
 	}
 	fmt.Fprintln(output, "\nAgents to serve:\n  1. OpenCode and Codex\n  2. OpenCode\n  3. Codex")
@@ -168,7 +169,7 @@ func setup(input io.Reader, output io.Writer) error {
 	if answer != "" && !strings.EqualFold(answer, "y") && !strings.EqualFold(answer, "yes") {
 		return errors.New("setup cancelled; configuration was not saved")
 	}
-	if err := saveConfig(path, home, workspace, agents, listen); err != nil {
+	if err := config.Save(path, home, workspace, agents, listen); err != nil {
 		return err
 	}
 	fmt.Fprintln(output, "\nSettings saved. Start with 'rmt serve', or restart the existing host service when it is safe.")
@@ -216,7 +217,7 @@ func setup(input io.Reader, output io.Writer) error {
 			if err != nil || network.IPv4(s.Self) == "" || s.Self.UserID == 0 {
 				return errors.New("settings saved; configure a network before installing the host service")
 			}
-			address = net.JoinHostPort(network.IPv4(s.Self), controlPort)
+			address = net.JoinHostPort(network.IPv4(s.Self), network.ControlPort)
 		}
 		if err := service.Install(address); err != nil {
 			return fmt.Errorf("settings saved; could not install host service: %w", err)

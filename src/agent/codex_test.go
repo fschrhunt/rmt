@@ -1,15 +1,16 @@
-package rmt
+package agent
 
 import (
 	"context"
 	"encoding/json"
-	"github.com/coder/websocket"
-	"github.com/coder/websocket/wsjson"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/coder/websocket"
+	"github.com/coder/websocket/wsjson"
 )
 
 // TestCodexSessionsUsesRemoteThreads checks native WebSocket discovery and workspace filtering.
@@ -45,7 +46,7 @@ func TestCodexSessionsUsesRemoteThreads(t *testing.T) {
 	defer srv.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	got, err := codexSessions(ctx, "ws"+strings.TrimPrefix(srv.URL, "http"), "server", "/home/me/dev")
+	got, err := CodexSessions(ctx, "ws"+strings.TrimPrefix(srv.URL, "http"), "server", "/home/me/dev")
 	if err != nil {
 		t.Fatal(err)
 	}

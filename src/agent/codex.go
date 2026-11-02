@@ -1,4 +1,4 @@
-package rmt
+package agent
 
 import (
 	"context"
@@ -20,10 +20,11 @@ import (
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 	"github.com/fschrhunt/rmt/src/network"
+	"github.com/fschrhunt/rmt/src/session"
 )
 
-// codexDirect runs the native UI through an authenticated local-to-HTTPS bridge.
-func codexDirect(profile network.Profile, dir string, extra []string, saved *session) error {
+// CodexDirect runs the native UI through an authenticated local-to-HTTPS bridge.
+func CodexDirect(profile network.Profile, dir string, extra []string, saved *session.Session) error {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return err
@@ -100,8 +101,8 @@ func rpc(ctx context.Context, conn *websocket.Conn, id int, method string, param
 	}
 }
 
-// codexSessions lists saved Codex threads in the host workspace.
-func codexSessions(ctx context.Context, address, host, workspace string, options ...*websocket.DialOptions) ([]session, error) {
+// CodexSessions lists saved Codex threads in the host workspace.
+func CodexSessions(ctx context.Context, address, host, workspace string, options ...*websocket.DialOptions) ([]session.Session, error) {
 	var opts *websocket.DialOptions
 	if len(options) > 0 {
 		opts = options[0]
@@ -119,7 +120,7 @@ func codexSessions(ctx context.Context, address, host, workspace string, options
 	if err = wsjson.Write(ctx, conn, map[string]any{"method": "initialized", "params": map[string]any{}}); err != nil {
 		return nil, err
 	}
-	var sessions []session
+	var sessions []session.Session
 	var cursor string
 	seen := make(map[string]bool)
 	for {
@@ -144,14 +145,14 @@ func codexSessions(ctx context.Context, address, host, workspace string, options
 			return nil, fmt.Errorf("thread/list: %w", err)
 		}
 		for _, v := range page.Data {
-			if v.ID == "" || !insideWorkspace(workspace, v.Cwd) {
+			if v.ID == "" || !session.InsideWorkspace(workspace, v.Cwd) {
 				continue
 			}
 			title := v.Name
 			if title == "" {
 				title = v.Preview
 			}
-			sessions = append(sessions, session{Name: sessionName("codex", v.ID), Host: host, Agent: "codex", ID: v.ID, Dir: v.Cwd, Title: title, Active: v.Status.Type == "active", Updated: v.Updated})
+			sessions = append(sessions, session.Session{Name: session.Name("codex", v.ID), Host: host, Agent: "codex", ID: v.ID, Dir: v.Cwd, Title: title, Active: v.Status.Type == "active", Updated: v.Updated})
 		}
 		if page.NextCursor == "" {
 			break

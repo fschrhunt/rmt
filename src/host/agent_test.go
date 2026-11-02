@@ -1,4 +1,4 @@
-package rmt
+package host
 
 import (
 	"context"
@@ -49,15 +49,5 @@ func TestAgentSupervisionIsIndependent(t *testing.T) {
 	<-done
 	if len(crashed) < 2 || len(started) != 1 {
 		t.Fatalf("crashing starts %d, healthy starts %d", len(crashed), len(started))
-	}
-}
-
-// TestHostInfoCompatibility accepts both current and earlier workspace responses.
-func TestHostInfoCompatibility(t *testing.T) {
-	if got := (hostInfo{Dev: "/old"}).workspace(); got != "/old" {
-		t.Fatal(got)
-	}
-	if got := (hostInfo{Workspace: "/new", Dev: "/old"}).workspace(); got != "/new" {
-		t.Fatal(got)
 	}
 }

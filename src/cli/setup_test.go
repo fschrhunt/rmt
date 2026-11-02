@@ -1,4 +1,4 @@
-package rmt
+package cli
 
 import (
 	"bytes"
@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/fschrhunt/rmt/src/config"
 )
 
 // TestSetupSavesSelection verifies setup stores the chosen workspace and agent.
@@ -22,21 +24,21 @@ func TestSetupSavesSelection(t *testing.T) {
 	if err := setup(strings.NewReader("~/projects\n2\nn\ny\n"), &output); err != nil {
 		t.Fatal(err)
 	}
-	c, err := loadConfig()
+	c, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Workspace != workspace || !c.enabled("opencode") || c.enabled("codex") {
+	if c.Workspace != workspace || !c.Enabled("opencode") || c.Enabled("codex") {
 		t.Fatalf("unexpected config: %+v", c)
 	}
 	if !strings.Contains(output.String(), "must be installed") {
 		t.Fatal("missing installation guidance")
 	}
-	if err := setWorkspace(filepath.Join(home, "config", "rmt", "config.json"), home, home); err != nil {
+	if err := config.SetWorkspace(filepath.Join(home, "config", "rmt", "config.json"), home, home); err != nil {
 		t.Fatal(err)
 	}
-	c, err = loadConfig()
-	if err != nil || c.enabled("codex") || !c.enabled("opencode") {
+	c, err = config.Load()
+	if err != nil || c.Enabled("codex") || !c.Enabled("opencode") {
 		t.Fatalf("changing workspace lost agents: %+v, %v", c, err)
 	}
 }
@@ -56,21 +58,6 @@ func TestSetupCancelLeavesConfigUntouched(t *testing.T) {
 	}
 }
 
-// TestAgentDefaultsAndValidation keeps older configuration compatible and rejects typos.
-func TestAgentDefaultsAndValidation(t *testing.T) {
-	c := config{}
-	if !c.enabled("opencode") || !c.enabled("codex") {
-		t.Fatal("older configs must enable both agents")
-	}
-	path := filepath.Join(t.TempDir(), "config.json")
-	if err := os.WriteFile(path, []byte(`{"agents":["codex","unknown"]}`), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := readConfig(path, t.TempDir()); err == nil {
-		t.Fatal("expected invalid agent error")
-	}
-}
-
 // TestSetupEnablesPairedNetworkAndPreservesItOnWorkspaceChange checks direct host configuration.
 func TestSetupEnablesPairedNetworkAndPreservesItOnWorkspaceChange(t *testing.T) {
 	home := t.TempDir()
@@ -81,15 +68,15 @@ func TestSetupEnablesPairedNetworkAndPreservesItOnWorkspaceChange(t *testing.T) 
 	if err := setup(strings.NewReader(home+"\n2\ny\n127.0.0.1:47473\ny\nn\n"), &output); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := loadConfig()
+	cfg, err := config.Load()
 	if err != nil || cfg.Listen != "127.0.0.1:47473" {
 		t.Fatalf("listen: %+v, %v", cfg, err)
 	}
 	path := filepath.Join(home, "config", "rmt", "config.json")
-	if err := setWorkspace(path, home, home); err != nil {
+	if err := config.SetWorkspace(path, home, home); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err = loadConfig()
+	cfg, err = config.Load()
 	if err != nil || cfg.Listen != "127.0.0.1:47473" {
 		t.Fatalf("workspace update lost listen address: %+v, %v", cfg, err)
 	}

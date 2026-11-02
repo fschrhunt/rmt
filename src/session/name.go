@@ -1,4 +1,4 @@
-package rmt
+package session
 
 import (
 	"crypto/sha256"
@@ -15,8 +15,8 @@ var animals = [...]string{
 	"tuna", "turkey", "viper", "whale", "zebra", "eagle", "finch", "gecko", "heron", "horse",
 }
 
-// sessionWords returns stable animal words for a native session and its collision fallback.
-func sessionWords(agent, id string) []string {
+// words returns stable animal words for a native session and its collision fallback.
+func words(agent, id string) []string {
 	sum := sha256.Sum256([]byte(agent + "\x00" + id))
 	words := make([]string, len(sum))
 	for i, b := range sum {
@@ -25,13 +25,13 @@ func sessionWords(agent, id string) []string {
 	return words
 }
 
-// sessionName gives a native session a stable animal handle.
-func sessionName(agent, id string) string {
-	return sessionWords(agent, id)[0]
+// Name gives a native session a stable animal handle.
+func Name(agent, id string) string {
+	return words(agent, id)[0]
 }
 
-// previousSessionName preserves the earlier six-character alphanumeric handles.
-func previousSessionName(agent, id string) string {
+// previousName preserves the earlier six-character alphanumeric handles.
+func previousName(agent, id string) string {
 	shortAnimals := [...]string{"ant", "bat", "bee", "cat", "cod", "cow", "dog", "eel", "elk", "emu", "fox", "gnu", "hen", "hog", "jay", "koi", "owl", "pig", "pug", "ram", "rat", "yak"}
 	const alphabet = "23456789abcdefghjkmnpqrstuvwxyz"
 	sum := sha256.Sum256([]byte(agent + "\x00" + id))
@@ -42,8 +42,8 @@ func previousSessionName(agent, id string) string {
 	})
 }
 
-// legacySessionName preserves handles produced before short animal names.
-func legacySessionName(agent, id string) string {
+// legacyName preserves handles produced before short animal names.
+func legacyName(agent, id string) string {
 	dogs := [...]string{"akita", "beagle", "collie", "corgi", "dingo", "finn", "husky", "jindo", "labrador", "milo", "poodle", "pug", "retriever", "shiba", "terrier", "whippet"}
 	sum := sha256.Sum256([]byte(agent + "\x00" + id))
 	return dogs[int(sum[0])%len(dogs)] + "-" + hex.EncodeToString(sum[1:5])

@@ -17,9 +17,12 @@ configuration or abstractions beyond what a change needs.
 ## Where things live
 
 - `main.go`: command entry point.
-- `src/cli.go`, `src/host.go` and `src/connect.go`: command dispatch, host lifecycle and clients.
-- `src/session.go`, `src/name.go`, `src/opencode.go` and `src/codex.go`: sessions and native agents.
-- `src/config.go`, `src/setup.go` and `src/pair.go`: configuration and interactive setup.
+- `src/cli/`: command dispatch, interactive setup, pairing, and terminal output.
+- `src/client/`: host connections and session discovery.
+- `src/host/`: host lifecycle and agent supervision.
+- `src/agent/`: native OpenCode and Codex interfaces and session APIs.
+- `src/session/`: session data, names, and selection.
+- `src/config/`: user configuration and workspace settings.
 - `src/network/`: paired HTTPS, private device credentials and optional Tailscale integration.
 - `src/service/`: macOS and Linux user service installation.
 - `*_test.go`: offline behavior tests next to the code they cover.

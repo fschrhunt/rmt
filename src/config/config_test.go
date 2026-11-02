@@ -1,4 +1,4 @@
-package rmt
+package config
 
 import (
 	"os"
@@ -10,7 +10,7 @@ import (
 func TestWorkspaceConfig(t *testing.T) {
 	home := t.TempDir()
 	path := filepath.Join(home, ".config", "rmt", "config.json")
-	cfg, err := readConfig(path, home)
+	cfg, err := Read(path, home)
 	if err != nil || cfg.Workspace != filepath.Join(home, "dev") {
 		t.Fatalf("default workspace: %+v, %v", cfg, err)
 	}
@@ -18,10 +18,10 @@ func TestWorkspaceConfig(t *testing.T) {
 	if err := os.Mkdir(workspace, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := setWorkspace(path, home, "~/projects"); err != nil {
+	if err := SetWorkspace(path, home, "~/projects"); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err = readConfig(path, home)
+	cfg, err = Read(path, home)
 	if err != nil || cfg.Workspace != workspace {
 		t.Fatalf("configured workspace: %+v, %v", cfg, err)
 	}
@@ -39,7 +39,7 @@ func TestInvalidConfigIsPreserved(t *testing.T) {
 	if err := os.WriteFile(path, original, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := setWorkspace(path, home, home); err == nil {
+	if err := SetWorkspace(path, home, home); err == nil {
 		t.Fatal("expected unknown config field to fail")
 	}
 	data, err := os.ReadFile(path)
@@ -52,13 +52,28 @@ func TestInvalidConfigIsPreserved(t *testing.T) {
 func TestConfigValidation(t *testing.T) {
 	home := t.TempDir()
 	path := filepath.Join(home, "config.json")
-	if err := setWorkspace(path, home, filepath.Join(home, "missing")); err == nil {
+	if err := SetWorkspace(path, home, filepath.Join(home, "missing")); err == nil {
 		t.Fatal("expected missing directory error")
 	}
-	if _, err := workspacePath("relative", home); err == nil {
+	if _, err := WorkspacePath("relative", home); err == nil {
 		t.Fatal("expected relative config path error")
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("unexpected config file: %v", err)
+	}
+}
+
+// TestAgentDefaultsAndValidation keeps older configuration compatible and rejects typos.
+func TestAgentDefaultsAndValidation(t *testing.T) {
+	c := Config{}
+	if !c.Enabled("opencode") || !c.Enabled("codex") {
+		t.Fatal("older configs must enable both agents")
+	}
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"agents":["codex","unknown"]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Read(path, t.TempDir()); err == nil {
+		t.Fatal("expected invalid agent error")
 	}
 }
