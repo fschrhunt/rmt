@@ -1,5 +1,5 @@
-// Package service installs the host with the user service manager.
-package service
+// Package services installs the host with the user service manager.
+package services
 
 import (
 	"errors"
@@ -13,17 +13,31 @@ import (
 	"time"
 )
 
+// nativePaths retains only non-secret paths needed to locate native program settings.
+func nativePaths() map[string]string {
+	result := map[string]string{}
+	for _, name := range []string{"XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME", "CODEX_HOME", "OPENCODE_CONFIG_DIR", "OPENCODE_CONFIG", "OPENCODE_DB"} {
+		if value := os.Getenv(name); value != "" {
+			result[name] = value
+		}
+	}
+	return result
+}
+
 // Install installs and starts a user service without replacing an existing one.
 // address is the host's control address, used to avoid starting a duplicate.
 func Install(address string) error {
 	conn, err := net.DialTimeout("tcp", address, 300*time.Millisecond)
 	if err == nil {
 		conn.Close()
-		return errors.New("a host is already listening; leave its existing service running")
+		return nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
+	}
+	if rel, err := filepath.Rel(os.TempDir(), home); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return nil
 	}
 	binary, err := os.Executable()
 	if err != nil {
@@ -34,7 +48,15 @@ func Install(address string) error {
 		return err
 	}
 	if rel, err := filepath.Rel(os.TempDir(), binary); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return errors.New("install the rmt executable before installing a service")
+		return nil
+	}
+	// Prefer a stable installed command symlink over a versioned package-manager target.
+	if installed, err := exec.LookPath("rmt"); err == nil {
+		if installed, err = filepath.Abs(installed); err == nil {
+			if target, err := filepath.EvalSymlinks(installed); err == nil && target == binary {
+				binary = installed
+			}
+		}
 	}
 	var servicePath, content string
 	switch runtime.GOOS {
@@ -57,7 +79,7 @@ func Install(address string) error {
 		if err := logFile.Close(); err != nil {
 			return err
 		}
-		content = launchAgent(binary, os.Getenv("PATH"), os.Getenv("XDG_CONFIG_HOME"), logPath)
+		content = launchAgent(binary, os.Getenv("PATH"), nativePaths(), logPath)
 	case "linux":
 		root := os.Getenv("XDG_CONFIG_HOME")
 		if root == "" {
@@ -67,7 +89,7 @@ func Install(address string) error {
 			return errors.New("XDG_CONFIG_HOME must be an absolute path")
 		}
 		servicePath = filepath.Join(root, "systemd", "user", "rmt.service")
-		content = systemdUnit(binary, os.Getenv("PATH"), os.Getenv("XDG_CONFIG_HOME"))
+		content = systemdUnit(binary, os.Getenv("PATH"), nativePaths())
 	default:
 		return fmt.Errorf("automatic service installation is not supported on %s", runtime.GOOS)
 	}
@@ -75,18 +97,16 @@ func Install(address string) error {
 		return err
 	}
 	file, err := os.OpenFile(servicePath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-	if errors.Is(err, os.ErrExist) {
-		return fmt.Errorf("service file already exists at %s; it was not changed", servicePath)
-	}
-	if err != nil {
-		return err
-	}
-	_, err = file.WriteString(content)
-	if closeErr := file.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		_ = os.Remove(servicePath)
+	if err == nil {
+		_, err = file.WriteString(content)
+		if closeErr := file.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			_ = os.Remove(servicePath)
+			return err
+		}
+	} else if !errors.Is(err, os.ErrExist) {
 		return err
 	}
 	run := func(name string, args ...string) error {
@@ -97,6 +117,10 @@ func Install(address string) error {
 		return nil
 	}
 	if runtime.GOOS == "darwin" {
+		label := fmt.Sprintf("gui/%d/com.rmt.host", os.Getuid())
+		if exec.Command("launchctl", "print", label).Run() == nil {
+			return nil
+		}
 		err = run("launchctl", "bootstrap", fmt.Sprintf("gui/%d", os.Getuid()), servicePath)
 	} else {
 		if err = run("systemctl", "--user", "daemon-reload"); err == nil {
@@ -104,7 +128,7 @@ func Install(address string) error {
 		}
 	}
 	if err != nil {
-		return fmt.Errorf("service file saved at %s, but could not start it: %w", servicePath, err)
+		return fmt.Errorf("could not start the host service at %s: %w", servicePath, err)
 	}
 	return nil
 }

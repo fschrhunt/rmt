@@ -1,8 +1,8 @@
 # Contributing
 
-rmt is a small Go program. Keep the native agent interfaces intact and favor simple changes.
+rmt is a small Go program. Keep the native program interfaces intact and favor simple changes.
 Go 1.24 or newer, Git, a POSIX shell, and ShellCheck are needed for development. The checks do not
-require a Tailscale connection, real agents, or model credentials.
+require a Tailscale connection, real programs, or model credentials.
 
 ```sh
 ./x hooks  # once per clone
@@ -13,7 +13,7 @@ require a Tailscale connection, real agents, or model credentials.
 `./x` defaults to `check`. Run `./x help` for the other commands. Use `./x dev` to run this
 checkout. Rebuilding does not restart an installed host service.
 
-The root `main.go` starts the CLI; implementation and tests live in packages under `src/`. See
+`src/cmd/rmt/main.go` starts the CLI; implementation and tests live in packages under `src/`. See
 [AGENTS.md](AGENTS.md) for the package map and development conventions.
 
 Tests should protect meaningful behavior and run offline. Never include credentials, prompts,

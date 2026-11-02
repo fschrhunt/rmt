@@ -1,148 +1,94 @@
 # rmt
 
-Run the native OpenCode or Codex terminal interface locally while the agent works on another
-device you own. Connect over a reachable LAN, VPN, or forwarded address. The interface is local;
-there is no remote terminal or SSH in the session.
+A local terminal prompt for working on another machine. Commands run on the host; OpenCode and
+Codex use their native local interfaces with their backends on the host.
 
-```sh
-rmt mini opencode
-rmt server codex
+```text
+$ rmt mini
+mini ~: ls
+mini ~: cd dev/my-project
+mini ~/dev/my-project: opencode
+mini ~/dev/my-project: exit
+[rmt is exiting]
 ```
 
-Arguments after the agent are passed to its native client, for example
-`rmt mini opencode --continue`.
+The prompt starts in the host user's home directory. `cd`, shell variables, and the environment
+persist until you disconnect. Pipes and redirection run on the host. Press Ctrl-D or type `exit`
+to disconnect; rmt prints `[rmt is exiting]`. Exiting the native program or closing the terminal
+disconnects that client. OpenCode and Codex keep control of their own managed services and saved
+sessions. The rmt host service stays available for other devices.
 
-## Setup
+## Configuration
 
-Install Go 1.24 or newer, build `rmt`, and put the executable on your PATH on each device:
+Settings live in `~/.config/rmt/config.toml`, or `$XDG_CONFIG_HOME/rmt/config.toml` when
+`XDG_CONFIG_HOME` is set. Create the file on each machine as needed. All fields are optional:
 
-```sh
-./x build
-mkdir -p "$HOME/.local/bin"
-install -m 755 dist/rmt "$HOME/.local/bin/rmt"
+```toml
+serve = true
+listen = "0.0.0.0:47473"
+programs = ["opencode", "codex"]
+shell = "/bin/sh"
+
+[hosts]
+mini = "https://mini.example:47473"
+server = "https://192.168.1.10:47473"
 ```
 
-Some systems already have a different `rmt` program; make sure `~/.local/bin` comes first on PATH.
-Both devices need the selected agent installed. OpenCode requires v2; Codex must support
-`app-server --ws-auth capability-token`, `--ws-token-sha256`, and `--remote-auth-token-env`.
+`serve` controls automatic local host-service installation and defaults to true. Set it to false
+before first use on a client-only machine; it does not stop a service that is already running.
+`listen` controls the host service's HTTPS listener and defaults to `0.0.0.0:47473`. Bind to a
+specific network interface if desired. `programs` selects host backends; both are enabled by default.
+`shell` is an absolute path to a POSIX-compatible shell, defaulting to `/bin/sh`. `hosts` maps
+local names to reachable HTTPS addresses. Without an entry, `rmt mini` connects to
+`https://mini:47473`, using normal DNS or your network's name resolution. Use LAN, VPN, Tailscale,
+or any other network that provides a reachable address; rmt does not configure networking or NAT.
+Changes to host settings take effect when its service restarts. Host names can be changed while
+keeping the same address and paired identity.
 
-On each host, run interactive setup to choose the workspace, agents, and whether to allow paired
-HTTPS connections. It checks for the agent executables, can start their native sign-in flows, and
-offers to install and start a per-user host service on macOS or Linux:
+## Host service and pairing
 
-```sh
-rmt setup
-```
+Install rmt and the desired programs on each machine. The first time you run `rmt` or
+`rmt <host>` on a machine, rmt installs and starts its user host service automatically on macOS
+or Linux with systemd. It keeps an existing service intact. Build from source with `./x build`;
+install the resulting binary somewhere permanent before first use. The service uses the `PATH`
+and non-secret native configuration paths from the first run. Existing service files are not
+rewritten. Environment-only credentials are not copied into the service file; use the program's
+own host-side authentication or configure the service environment separately. If its user service manager is unavailable,
+rmt reports the error while still allowing client connections.
 
-The workspace directory must already exist; the default is `~/dev`. `rmt config` shows the
-effective settings and config path; `rmt config set ~/projects` changes just the workspace.
-Configuration is stored in `$XDG_CONFIG_HOME/rmt/config.json`, or `~/.config/rmt/config.json`
-when `XDG_CONFIG_HOME` is unset. No config file is created until settings are saved. Restart an
-already running host service when it is safe to apply changed settings. Setup never replaces an
-existing service; use `rmt serve` to run a host manually. Only one host service can use the ports
-on a device at a time. The service uses the `rmt` executable and PATH present during setup.
+The first `rmt <host>` connection prompts for pairing. On the host, open the private
+`~/.config/rmt/pairing.json` file (under `$XDG_CONFIG_HOME` if set), compare its `verify` value with
+the one shown locally, and enter its one-time code. Confirm the verification value through a trusted
+channel. The code expires and disappears after successful pairing. Subsequent connections use a
+saved credential and pinned host identity in the client's private config directory.
 
-You can also edit the host config directly. For example:
+A paired device can execute commands with the host user's permissions. On the host,
+`devices.json` in the same private directory lists paired devices. Remove a device's entire entry
+to revoke it; the running service reloads the file and closes that device's active connections.
+Use an editor that saves with an atomic rename. While the file is invalid, new requests are
+denied; if it remains invalid for two seconds, active connections are closed. Keep it owner-only. To forget a host on a client, remove its entry from the
+private `hosts.json` file; this alone does not revoke its host access.
 
-```json
-{
-  "workspace": "~/dev",
-  "agents": ["opencode", "codex"],
-  "listen": "0.0.0.0:47473"
-}
-```
+## Terminal behavior
 
-`workspace` must exist. Choose at least one supported agent; omitting `agents` enables both.
-Omitting `listen` disables paired HTTPS. The host reads settings when it starts, so restart its
-service when safe after editing. The legacy Tailscale ports and pairing-code lifetime are fixed.
+Input editing and history happen locally; Tab completes remote paths. Command output comes from the host. Ordinary commands run in a
+persistent non-interactive POSIX shell, not a remote terminal: programs cannot read interactive
+stdin, and full-screen applications are not supported. Known programs such as `vim` and `tmux` are
+reported as unsupported, but rmt cannot identify every interactive program. Ctrl-C asks the host
+to terminate the current command. If a connection drops during a command, its outcome may be
+unknown; rmt does not replay it. After a network interruption, rmt attempts to reconnect to the
+same shell. The host retains its shell state and up to 1 MiB of output for 15 seconds; it reports
+any lost output. A shell command already running when the connection closes is allowed to finish.
+After the grace period, an idle shell is cleaned up. If the rmt host restarts or the session
+expires, rmt starts a new shell and tries to restore the last known directory. Supported native applications are `opencode` and `codex`, launched
+as standalone commands from the current remote directory. Program flags are passed to the native CLI;
+shell expansions, pipes, and wrappers around these application launches are not supported.
+The host and client must use the same rmt protocol version. rmt checks that installed programs
+support the capabilities needed for their role. On the host, OpenCode uses its native managed
+service and Codex uses its native managed app-server daemon; rmt does not stop either on detach.
+OpenCode must support its v2 managed-service commands. If its shared service is explicitly disabled,
+rmt reports that setting instead of changing it. Its service address must use localhost or an IP
+address belonging to the host. Native interfaces handle their own network interruptions and task
+state; rmt does not replay or cancel their work.
 
-## Pair devices
-
-When prompted by `rmt setup`, enable paired HTTPS. The default listener is `0.0.0.0:47473`;
-choose a different bind address or port if needed. Once the host service is running, generate a
-single-use code on the host:
-
-```sh
-rmt code
-```
-
-On the client, pair a name with the host's reachable address:
-
-```sh
-rmt pair mini https://HOST:47473
-rmt mini opencode
-```
-
-Compare the certificate fingerprint shown on the client with `rmt code` on the host before
-accepting it, then enter the code. The code expires after 15 minutes and is valid for one device.
-Keep it private. `rmt code` creates a new code without restarting the host or its agents. The
-host's identity and paired-device registry, and the client's host credentials, are stored in
-owner-only files beside the rmt config. Back up the host identity if it needs to stay trusted.
-
-On a client, `hosts.json` contains paired names, addresses, certificate fingerprints, and device
-tokens. You can edit a host's `url` if its address changes; keep its verified fingerprint and
-token unchanged. Treat this file as a secret. On a host, `identity.pem` contains its private TLS
-identity and `devices.json` holds paired-device token hashes. Keep those files private; use the
-commands below to manage devices.
-
-Use `rmt hosts` to list local paired hosts and `rmt unpair mini` to remove a local profile.
-Removing a profile does not revoke access on the host. On the host, `rmt devices` lists paired
-clients and `rmt revoke <device-id>` revokes one and closes its active connections.
-
-The address must already be reachable and the host's firewall must allow the chosen TCP port.
-Pairing does not set up NAT traversal, a relay, or firewall rules. You can use a LAN address,
-DNS name, Tailscale address, another VPN, or a securely forwarded address without changing rmt.
-
-Existing Tailscale setups continue to work without pairing: devices must belong to the same
-Tailscale user and their tailnet policy must permit TCP ports 47470–47472. A paired host name
-takes precedence if it matches a Tailscale device name.
-
-On macOS the installed service writes diagnostics to `~/Library/Logs/rmt/host.log`; on Linux use
-`journalctl --user -u rmt.service`. Agent error output is included and may contain sensitive
-details. A Linux user service normally starts at login; enabling user lingering is a separate
-system setting if the host needs to run without a login.
-
-To apply changed settings to a service installed by setup, wait until no agents are working and
-run `launchctl kickstart -k gui/$(id -u)/com.rmt.host` on macOS or
-`systemctl --user restart rmt.service` on Linux. Restarting stops that host's running agents.
-
-## Find and reconnect to sessions
-
-```sh
-rmt ls                         # sessions on reachable hosts
-rmt ls mini                    # sessions on one host
-rmt connect fox                # reconnect using a name from rmt ls
-rmt mini opencode --connect    # reconnect when there is exactly one match
-```
-
-Session handles are stable animal names derived from each agent's own session ID, such as `fox`;
-they do not change the agent's session title. Earlier handles still work. If names collide,
-`rmt ls` shows a host-qualified animal path such as `mini/fox/otter`. It lists native OpenCode and
-Codex sessions under each host's configured workspace, including sessions started outside rmt, and
-shows active sessions when the agent reports them. Offline devices are reported but cannot be
-listed. Devices without a host service are omitted; use `rmt ls <host>` to check a particular host.
-Agents may not save a new session until its first message. An unqualified `rmt connect fox`
-requires every eligible device to be reachable and checked, because an unchecked device might
-have the same name. If some devices cannot be checked, use `rmt connect mini/fox` to select a
-host; that host's session scan must still complete successfully.
-
-Closing the local window disconnects the client; it does not stop the host service. Use
-`rmt connect <name>` to reopen the native interface. A running task may wait for approval, and an
-explicit interrupt can stop it. A host or service restart stops the backend; session history and
-resume behavior remain subject to the agent. Automatic reconnect is not implemented.
-
-Paired connections use TLS pinned to the verified host certificate and a separate credential per
-device. The optional legacy Tailscale listeners authenticate requests against the host owner's
-Tailscale identity. Agent backends listen on loopback with per-start credentials. Native client
-bridges run locally with separate credentials while their client is open. OpenCode's bridge maps
-the client's current directory to the host workspace; other paths pass through unchanged. An agent
-that exits is restarted independently without stopping the other agent.
-
-The workspace is a starting location, not a security sandbox. Agent permissions and sandbox settings
-still apply. Codex's remote app-server transport is experimental. Claude Code is not supported.
-
-## Development
-
-Run `./x check` for formatting, vet, tests, and ShellCheck. `./x build` creates `dist/rmt` without replacing
-the installed binary or restarting a running host service. See [CONTRIBUTING.md](CONTRIBUTING.md)
-for the development workflow.
+Run `rmt help` for the short usage. See [CONTRIBUTING.md](CONTRIBUTING.md) for development.

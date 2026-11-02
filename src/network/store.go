@@ -124,11 +124,11 @@ func SaveProfile(dir, name string, profile Profile) error {
 func ValidateName(name string) error {
 	name = strings.ToLower(name)
 	if name == "" || len(name) > 64 {
-		return errors.New("host name must be 1 to 64 letters, digits, or hyphens")
+		return errors.New("host name must be 1 to 64 letters, digits, dots, or hyphens")
 	}
 	for _, c := range name {
-		if !(c >= 'a' && c <= 'z') && !(c >= '0' && c <= '9') && c != '-' {
-			return errors.New("host name must use letters, digits, or hyphens")
+		if !(c >= 'a' && c <= 'z') && !(c >= '0' && c <= '9') && c != '-' && c != '.' {
+			return errors.New("host name must use letters, digits, dots, or hyphens")
 		}
 	}
 	return nil

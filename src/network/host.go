@@ -28,19 +28,28 @@ type Device struct {
 	TokenHash string `json:"token_hash,omitempty"`
 }
 
+// pairAttempts bounds guesses from one network address during a short window.
+type pairAttempts struct {
+	count int
+	since time.Time
+}
+
 // Host owns the TLS identity, single-use code and paired-device registry.
 type Host struct {
-	dir         string
-	cert        tls.Certificate
-	fingerprint string
-	mu          sync.Mutex
-	code        string
-	expires     time.Time
-	attempts    int
-	devices     []Device
-	active      map[string]map[*access]struct{}
-	local       net.Listener
-	server      *http.Server
+	dir          string
+	cert         tls.Certificate
+	fingerprint  string
+	mu           sync.Mutex
+	code         string
+	expires      time.Time
+	attempts     map[string]pairAttempts
+	devices      []Device
+	registryErr  error
+	invalidSince time.Time
+	active       map[string]map[*access]struct{}
+	local        net.Listener
+	server       *http.Server
+	watchStop    chan struct{}
 }
 
 // NewHost loads a private identity and existing device registry.
@@ -58,7 +67,84 @@ func NewHost(dir string) (*Host, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
+	h.refreshDevices()
+	if h.registryErr != nil {
+		return nil, fmt.Errorf("invalid paired devices file: %w", h.registryErr)
+	}
 	return h, nil
+}
+
+// refreshDevices applies owner edits and disconnects devices removed from the registry.
+func (h *Host) refreshDevices() {
+	h.mu.Lock()
+	data, err := readPrivate(filepath.Join(h.dir, "devices.json"))
+	var devices []Device
+	if errors.Is(err, os.ErrNotExist) {
+		err = nil
+	} else if err == nil {
+		err = json.Unmarshal(data, &devices)
+	}
+	if len(devices) > 64 {
+		err = errors.New("too many devices")
+	}
+	seen := map[string]bool{}
+	for _, d := range devices {
+		hash, e := hex.DecodeString(d.TokenHash)
+		if d.ID == "" || seen[d.ID] || e != nil || len(hash) != sha256.Size {
+			err = errors.New("invalid device")
+			break
+		}
+		seen[d.ID] = true
+	}
+	h.registryErr = err
+	if err != nil {
+		if h.invalidSince.IsZero() {
+			h.invalidSince = time.Now()
+		}
+		if time.Since(h.invalidSince) < 2*time.Second {
+			h.mu.Unlock()
+			return
+		}
+		devices = nil
+	} else {
+		h.invalidSince = time.Time{}
+	}
+	allowed := map[string]bool{}
+	for _, d := range devices {
+		allowed[d.TokenHash] = true
+	}
+	h.devices = devices
+	h.registryErr = err
+	var revoked []*access
+	for hash, entries := range h.active {
+		if !allowed[hash] {
+			for a := range entries {
+				revoked = append(revoked, a)
+			}
+			delete(h.active, hash)
+		}
+	}
+	h.mu.Unlock()
+	for _, a := range revoked {
+		a.cancel()
+		if a.conn != nil {
+			_ = a.conn.Close()
+		}
+	}
+}
+
+// watchDevices reloads the owner-managed registry and applies revocations.
+func (h *Host) watchDevices(stop <-chan struct{}) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			h.refreshDevices()
+		case <-stop:
+			return
+		}
+	}
 }
 
 // TLS returns this host's persistent TLS configuration.
@@ -70,22 +156,50 @@ func (h *Host) TLS() *tls.Config {
 func (h *Host) codeForOwner() (map[string]string, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	return h.newCodeLocked()
+}
+
+// newCodeLocked creates a short-lived pairing file readable only by the host user.
+func (h *Host) newCodeLocked() (map[string]string, error) {
 	code, err := randomToken(12)
 	if err != nil {
 		return nil, err
 	}
-	h.code, h.expires, h.attempts = code, time.Now().Add(15*time.Minute), 0
-	return map[string]string{"code": code, "fingerprint": h.fingerprint, "expires": h.expires.Format(time.RFC3339)}, nil
+	expires := time.Now().Add(15 * time.Minute)
+	result := map[string]string{"code": code, "fingerprint": h.fingerprint, "verify": h.fingerprint[:32], "expires": expires.Format(time.RFC3339)}
+	data, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	if err := writePrivate(filepath.Join(h.dir, "pairing.json"), append(data, '\n')); err != nil {
+		return nil, err
+	}
+	h.code, h.expires = code, expires
+	return result, nil
+}
+
+// ensureCode creates a pairing file on the first connection, or after it expires.
+func (h *Host) ensureCode() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.code != "" && time.Now().Before(h.expires) {
+		return nil
+	}
+	_, err := h.newCodeLocked()
+	return err
 }
 
 // enroll exchanges a one-time code for a unique, persistent device token.
 func (h *Host) enroll(code, name string) (string, error) {
+	h.refreshDevices()
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.code == "" || time.Now().After(h.expires) || h.attempts >= 20 {
+	if h.registryErr != nil {
+		return "", errors.New("invalid paired devices file")
+	}
+	if h.code == "" || time.Now().After(h.expires) {
 		return "", errors.New("pairing code expired or unavailable")
 	}
-	h.attempts++
 	if subtle.ConstantTimeCompare([]byte(code), []byte(h.code)) != 1 {
 		return "", errors.New("invalid pairing code")
 	}
@@ -111,6 +225,7 @@ func (h *Host) enroll(code, name string) (string, error) {
 		return "", err
 	}
 	h.devices, h.code = devices, ""
+	_ = os.Remove(filepath.Join(h.dir, "pairing.json"))
 	return token, nil
 }
 
@@ -150,6 +265,27 @@ func (w *upgradeWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return conn, rw, nil
 }
 
+// deviceContext identifies the authenticated device without exposing its token.
+type deviceContext struct{}
+
+// DeviceKey returns the paired device's token hash for binding host sessions.
+func DeviceKey(ctx context.Context) string { key, _ := ctx.Value(deviceContext{}).(string); return key }
+
+// Authorized reports whether the paired device still has access.
+func (h *Host) Authorized(key string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.registryErr != nil {
+		return false
+	}
+	for _, d := range h.devices {
+		if subtle.ConstantTimeCompare([]byte(key), []byte(d.TokenHash)) == 1 {
+			return true
+		}
+	}
+	return false
+}
+
 // Auth restricts each HTTPS request to a currently paired device.
 func (h *Host) Auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -165,6 +301,9 @@ func (h *Host) Auth(next http.Handler) http.Handler {
 		h.mu.Lock()
 		allowed := false
 		for _, d := range h.devices {
+			if h.registryErr != nil {
+				break
+			}
 			if subtle.ConstantTimeCompare([]byte(hash), []byte(d.TokenHash)) == 1 {
 				allowed = true
 				break
@@ -192,7 +331,7 @@ func (h *Host) Auth(next http.Handler) http.Handler {
 			cancel()
 		}()
 		r.Header.Del("Authorization")
-		next.ServeHTTP(&upgradeWriter{ResponseWriter: w, host: h, hash: hash, access: a}, r.WithContext(ctx))
+		next.ServeHTTP(&upgradeWriter{ResponseWriter: w, host: h, hash: hash, access: a}, r.WithContext(context.WithValue(ctx, deviceContext{}, hash)))
 	})
 }
 
@@ -236,13 +375,55 @@ func (h *Host) revoke(id string) error {
 	return nil
 }
 
+// allowPairAttempt limits unauthenticated guesses without invalidating another user's code.
+func (h *Host) allowPairAttempt(address string) bool {
+	ip, _, err := net.SplitHostPort(address)
+	if err != nil {
+		ip = address
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	now := time.Now()
+	if h.attempts == nil {
+		h.attempts = make(map[string]pairAttempts)
+	}
+	for key, attempt := range h.attempts {
+		if now.Sub(attempt.since) > time.Minute {
+			delete(h.attempts, key)
+		}
+	}
+	attempt, ok := h.attempts[ip]
+	if !ok {
+		if len(h.attempts) >= 1024 {
+			return false
+		}
+		attempt.since = now
+	}
+	if attempt.count >= 5 {
+		return false
+	}
+	attempt.count++
+	h.attempts[ip] = attempt
+	return true
+}
+
 // Pairing exposes identity and one-time pairing without exposing other endpoints.
 func (h *Host) Pairing(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/identity":
+		if err := h.ensureCode(); err != nil {
+			http.Error(w, "pairing unavailable", http.StatusServiceUnavailable)
+			return
+		}
 		name, _ := os.Hostname()
 		_ = json.NewEncoder(w).Encode(map[string]string{"name": name})
 	case r.Method == http.MethodPost && r.URL.Path == "/pair":
+		if !h.allowPairAttempt(r.RemoteAddr) {
+			http.Error(w, "too many attempts", http.StatusTooManyRequests)
+			return
+		}
+		_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(5 * time.Second))
+		defer http.NewResponseController(w).SetReadDeadline(time.Time{})
 		var req struct {
 			Code string `json:"code"`
 			Name string `json:"name"`
@@ -292,6 +473,8 @@ func (h *Host) StartLocal() error {
 		return err
 	}
 	h.local = l
+	h.watchStop = make(chan struct{})
+	go h.watchDevices(h.watchStop)
 	h.server = &http.Server{ReadHeaderTimeout: 5 * time.Second, Handler: http.HandlerFunc(h.localControl)}
 	go func() { _ = h.server.Serve(l) }()
 	return nil
@@ -299,6 +482,10 @@ func (h *Host) StartLocal() error {
 
 // Close stops the local control socket and removes it.
 func (h *Host) Close() {
+	if h.watchStop != nil {
+		close(h.watchStop)
+		h.watchStop = nil
+	}
 	if h.server != nil {
 		_ = h.server.Close()
 	}

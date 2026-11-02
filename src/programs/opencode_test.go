@@ -1,16 +1,13 @@
-package agent
+package programs
 
 import (
-	"context"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/fschrhunt/rmt/src/session"
 )
 
 // TestTranslateLocation maps only the local startup root, preserving other paths.
@@ -27,7 +24,7 @@ func TestTranslateLocation(t *testing.T) {
 	}
 }
 
-// TestLocalBridgeRequiresAuthentication protects the remote agent from other local clients.
+// TestLocalBridgeRequiresAuthentication protects the remote program from other local clients.
 func TestLocalBridgeRequiresAuthentication(t *testing.T) {
 	reached := false
 	h := localBridge(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -54,8 +51,8 @@ func TestLocalBridgeRequiresAuthentication(t *testing.T) {
 	}
 }
 
-// TestOpenCodeClientNeedsNoLocalWorkspace checks that a client works without ~/dev.
-func TestOpenCodeClientNeedsNoLocalWorkspace(t *testing.T) {
+// TestOpenCodeClientNeedsNoLocalProject checks that a client works without a matching project directory.
+func TestOpenCodeClientNeedsNoLocalProject(t *testing.T) {
 	home := t.TempDir()
 	bin := filepath.Join(home, "bin")
 	if err := os.Mkdir(bin, 0700); err != nil {
@@ -69,40 +66,11 @@ func TestOpenCodeClientNeedsNoLocalWorkspace(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("PATH", bin)
 	t.Setenv("RMT_TEST_ARGS", output)
-	if err := OpenCode("127.0.0.1", "/other/workspace", nil); err != nil {
+	if err := OpenCodeAt(&url.URL{Scheme: "http", Host: "127.0.0.1:47471"}, nil, "/other/project", nil); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(output)
 	if err != nil || !strings.HasPrefix(string(data), "--server\nhttp://127.0.0.1:") {
 		t.Fatalf("client arguments: %q, %v", data, err)
-	}
-}
-
-// TestOpenCodeSessionsFollowsPagesAndReportsActive verifies native-session discovery.
-func TestOpenCodeSessionsFollowsPagesAndReportsActive(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/session/active":
-			fmt.Fprint(w, `{"data":{"ses_one":{}}}`)
-		case "/api/session":
-			if r.URL.Query().Get("cursor") == "next" {
-				fmt.Fprint(w, `{"data":[{"id":"ses_two","title":"Second","location":{"directory":"/home/me/dev/app"}}],"cursor":{"next":null}}`)
-				return
-			}
-			fmt.Fprint(w, `{"data":[{"id":"ses_one","title":"First","location":{"directory":"/home/me/dev"}},{"id":"ses_other","location":{"directory":"/home/me/private"}}],"cursor":{"next":"next"}}`)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer srv.Close()
-	got, err := OpenCodeSessions(context.Background(), srv.Client(), srv.URL, "mini", "/home/me/dev")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 2 || got[0].ID != "ses_one" || !got[0].Active || got[1].ID != "ses_two" || got[1].Active {
-		t.Fatalf("unexpected sessions: %+v", got)
-	}
-	if got[0].Name != session.Name("opencode", "ses_one") {
-		t.Fatalf("unstable name: %s", got[0].Name)
 	}
 }

@@ -222,3 +222,111 @@ func TestPairingCodeCanOnlyBeUsedOnceConcurrently(t *testing.T) {
 		t.Fatalf("successful pairings: %d", successes.Load())
 	}
 }
+
+// TestRegistryEditsRevokeAccess checks that removing a paired device takes effect without a restart.
+func TestRegistryEditsRevokeAccess(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	h, err := NewHost(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := h.codeForOwner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := h.enroll(code["code"], "client")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := h.Auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	request := func() int {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w.Code
+	}
+	if request() != http.StatusNoContent {
+		t.Fatal("paired device denied")
+	}
+	if err := writePrivate(filepath.Join(h.dir, "devices.json"), []byte("[]\n")); err != nil {
+		t.Fatal(err)
+	}
+	h.refreshDevices()
+	if request() != http.StatusUnauthorized {
+		t.Fatal("removed device remained authorized")
+	}
+}
+
+// TestPairingRateLimitPreservesCode prevents a remote client from resetting another pairing.
+func TestPairingRateLimitPreservesCode(t *testing.T) {
+	h, err := NewHost(filepath.Join(t.TempDir(), "rmt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := h.codeForOwner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 6; i++ {
+		r := httptest.NewRequest("POST", "/pair", strings.NewReader(`{"code":"wrong","name":"test"}`))
+		r.RemoteAddr = "192.0.2.1:1234"
+		w := httptest.NewRecorder()
+		h.Pairing(w, r)
+		if i == 5 && w.Code != http.StatusTooManyRequests {
+			t.Fatal(w.Code)
+		}
+	}
+	if err := h.ensureCode(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.enroll(code["code"], "client"); err != nil {
+		t.Fatal("valid code changed:", err)
+	}
+}
+
+// TestTransientRegistryEditDeniesNewRequests checks recovery after a partial save.
+func TestTransientRegistryEditDeniesNewRequests(t *testing.T) {
+	h, err := NewHost(filepath.Join(t.TempDir(), "rmt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := h.codeForOwner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := h.enroll(code["code"], "client")
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(h.dir, "devices.json")
+	valid, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte("["), 0600); err != nil {
+		t.Fatal(err)
+	}
+	h.refreshDevices()
+	handler := h.Auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	request := func() int {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("GET", "/", nil)
+		r.Header.Set("Authorization", "Bearer "+token)
+		handler.ServeHTTP(w, r)
+		return w.Code
+	}
+	if request() != http.StatusUnauthorized {
+		t.Fatal("invalid registry accepted")
+	}
+	if err := os.WriteFile(file, valid, 0600); err != nil {
+		t.Fatal(err)
+	}
+	h.refreshDevices()
+	if request() != http.StatusNoContent {
+		t.Fatal("registry did not recover")
+	}
+}

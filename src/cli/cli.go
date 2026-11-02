@@ -1,115 +1,294 @@
-// Package cli handles rmt commands and interactive input.
+// Package cli implements the local remote-host prompt.
 package cli
 
 import (
+	"bufio"
+	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
+	"os/signal"
+	"path"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+	"unicode"
 
 	"github.com/fschrhunt/rmt/src/client"
-	"github.com/fschrhunt/rmt/src/host"
-	"github.com/fschrhunt/rmt/src/session"
+	"github.com/fschrhunt/rmt/src/config"
+	"github.com/fschrhunt/rmt/src/hosts"
+	"github.com/fschrhunt/rmt/src/network"
+	"github.com/fschrhunt/rmt/src/services"
+	"github.com/fschrhunt/rmt/src/shell"
+	"github.com/peterh/liner"
+	"net"
 )
 
-// Main dispatches host, session discovery, and native-client commands.
+// ensureHost starts this machine's user service once without replacing an existing service.
+func ensureHost() {
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "rmt: local host:", err)
+		return
+	}
+	if cfg.Serve != nil && !*cfg.Serve {
+		return
+	}
+	address := cfg.Listen
+	if address == "" {
+		address = "127.0.0.1:47473"
+	} else if host, port, e := net.SplitHostPort(address); e == nil {
+		if host == "" || (net.ParseIP(host) != nil && net.ParseIP(host).IsUnspecified()) {
+			host = "127.0.0.1"
+		}
+		address = net.JoinHostPort(host, port)
+	}
+	if err := services.Install(address); err != nil {
+		fmt.Fprintln(os.Stderr, "rmt: local host:", err)
+	}
+}
+
+// Main connects one host or runs the internal host service.
 func Main() {
 	log.SetFlags(0)
-	a := os.Args[1:]
-	if len(a) > 0 && (a[0] == "code" || a[0] == "devices" || a[0] == "revoke" || a[0] == "hosts" || a[0] == "unpair") {
-		if err := hostControl(a[0], a[1:]); err != nil {
+	args := os.Args[1:]
+	if len(args) == 1 && args[0] == "--serve" {
+		if err := hosts.Run(); err != nil {
 			log.Fatal("rmt: ", err)
 		}
 		return
 	}
-	if len(a) > 0 && a[0] == "pair" {
-		if len(a) != 3 {
-			log.Fatal("usage: rmt pair <name> <https://host:port>")
-		}
-		if err := pairHost(a[1], a[2], os.Stdin, os.Stdout); err != nil {
-			log.Fatal("rmt: ", err)
-		}
+	if len(args) == 0 {
+		ensureHost()
+	}
+	if len(args) == 0 || (len(args) == 1 && (args[0] == "help" || args[0] == "--help" || args[0] == "-h")) {
+		fmt.Fprintln(os.Stdout, "Usage: rmt <host>\n\nConnect to a host using the addresses in ~/.config/rmt/config.toml.\nType exit or press Ctrl-D to disconnect.")
 		return
 	}
-	if len(a) >= 1 && a[0] == "setup" {
-		if len(a) != 1 {
-			log.Fatal("usage: rmt setup")
-		}
-		if err := setup(os.Stdin, os.Stdout); err != nil {
+	if len(args) != 1 {
+		log.Fatal("usage: rmt <host>")
+	}
+	name := args[0]
+	if err := network.ValidateName(name); err != nil {
+		log.Fatal("rmt: ", err)
+	}
+	ensureHost()
+	input := bufio.NewReader(os.Stdin)
+	address, err := client.PairAddress(name)
+	if err != nil {
+		log.Fatal("rmt: ", err)
+	}
+	if address != "" {
+		if err = pairHost(name, address, input, os.Stdout); err != nil {
 			log.Fatal("rmt: ", err)
 		}
-		return
 	}
-	if len(a) >= 1 && a[0] == "config" {
-		if err := configCommand(a[1:]); err != nil {
-			log.Fatal("rmt: ", err)
-		}
-		return
+	remote, err := client.OpenShell(name)
+	if err != nil {
+		log.Fatal("rmt: ", err)
 	}
-	if len(a) == 1 && a[0] == "serve" {
-		if err := host.Run(); err != nil {
-			log.Fatal("rmt: ", err)
-		}
-		return
+	if err = prompt(name, remote, input, os.Stdout); err != nil {
+		log.Fatal("rmt: ", err)
 	}
-	if len(a) >= 1 && a[0] == "ls" {
-		if len(a) > 2 {
-			log.Fatal("usage: rmt ls [host]")
-		}
-		host := ""
-		if len(a) == 2 {
-			host = a[1]
-		}
-		if err := listSessions(host); err != nil {
-			log.Fatal("rmt: ", err)
-		}
-		return
+}
+
+// promptLabel shows the host and directory without consulting the network.
+func promptLabel(name, home, directory string) string {
+	dir := directory
+	if dir == home {
+		dir = "~"
+	} else if strings.HasPrefix(dir, home+"/") {
+		dir = "~" + strings.TrimPrefix(dir, home)
 	}
-	if len(a) >= 1 && a[0] == "connect" {
-		if len(a) < 2 {
-			log.Fatal("usage: rmt connect [host/]<name> [agent options...]")
+	return name + " " + path.Clean(dir) + ": "
+}
+
+// reconnect replaces a lost shell without repeating the interrupted command.
+func reconnect(name string, old *client.Shell, output io.Writer) (*client.Shell, error) {
+	dir := old.Directory()
+	old.Abort()
+	fmt.Fprintln(output, "[rmt reconnecting; the last command was not replayed]")
+	var err error
+	for i := 0; i < 3; i++ {
+		if i > 0 {
+			time.Sleep(time.Second)
 		}
-		host, name, err := session.ParseReference(a[1])
+		var next *client.Shell
+		next, err = client.ResumeShell(name, old)
+		if err == nil {
+			fmt.Fprintln(output, "[rmt reconnected]")
+			return next, nil
+		}
+		next, err = client.OpenShell(name)
 		if err != nil {
-			log.Fatal("rmt: ", err)
+			continue
 		}
-		saved, err := findSession(name, host, "")
-		if err != nil {
-			log.Fatal("rmt: ", err)
+		if dir != "" && dir != next.Directory() {
+			quoted := "'" + strings.ReplaceAll(dir, "'", "'\\''") + "'"
+			status, e := next.Run("cd "+quoted, io.Discard)
+			if e != nil || status != 0 {
+				fmt.Fprintln(output, "[rmt could not restore the previous directory]")
+			}
 		}
-		if err = client.Connect(saved.Host, saved.Agent, a[2:], &saved); err != nil {
-			log.Fatal("rmt: ", err)
-		}
-		return
+		fmt.Fprintln(output, "[rmt reconnected; shell variables were reset]")
+		return next, nil
 	}
-	if len(a) < 2 || a[0] == "--help" || a[0] == "help" {
-		fmt.Fprint(os.Stderr, `Usage:
-  rmt <host> <opencode|codex> [--connect] [agent options...]
-  rmt ls [host]                    List sessions
-  rmt connect <name>               Reconnect to a session
-  rmt setup                        Configure this host
-  rmt serve                        Run this host
-  rmt config [set <workspace>]     Show or change settings
-  rmt code                         Generate a one-time pairing code on the host
-  rmt pair <name> <https://host:port>  Pair a client with a host
-  rmt hosts | rmt unpair <host>    Manage paired hosts on this client
-  rmt devices | rmt revoke <id>    Manage paired devices on the host
-`)
-		if len(a) == 0 || a[0] == "help" || a[0] == "--help" {
+	return nil, err
+}
+
+// escapeCompletion makes a remote filename safe to insert into a shell command.
+func escapeCompletion(value string) string {
+	var result strings.Builder
+	for i, r := range value {
+		if unicode.IsControl(r) {
+			return ""
+		}
+		if !(unicode.IsLetter(r) || unicode.IsDigit(r) || strings.ContainsRune("_./-", r) || (i == 0 && r == '~')) {
+			result.WriteByte('\\')
+		}
+		result.WriteRune(r)
+	}
+	return result.String()
+}
+
+// prompt edits input locally and sends ordinary commands to the connected shell.
+func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Writer) error {
+	home := remote.Directory()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var remoteMu sync.Mutex
+	terminated := make(chan os.Signal, 1)
+	signal.Notify(terminated, syscall.SIGHUP, syscall.SIGTERM)
+	defer signal.Stop(terminated)
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-terminated:
+			cancel()
+			finished := make(chan struct{})
+			go func() { remoteMu.Lock(); remote.Close(); remoteMu.Unlock(); close(finished) }()
+			select {
+			case <-finished:
+			case <-time.After(2 * time.Second):
+			}
+			os.Exit(0)
+		case <-done:
 			return
 		}
-		os.Exit(2)
+	}()
+	defer func() { remote.Close() }()
+	original, terminalErr := liner.TerminalMode()
+	var editor *liner.State
+	var editing liner.ModeApplier
+	if terminalErr == nil {
+		editor = liner.NewLiner()
+		defer editor.Close()
+		editor.SetCtrlCAborts(true)
+		editor.SetWordCompleter(func(line string, pos int) (string, []string, string) {
+			chars := []rune(line)
+			if pos < 0 || pos > len(chars) {
+				return line, nil, ""
+			}
+			head, tail := string(chars[:pos]), string(chars[pos:])
+			start := strings.LastIndexAny(head, " \t") + 1
+			prefix := head[start:]
+			if strings.ContainsAny(prefix, "\\\"'`$*?[]{};|&<>()") {
+				return head, nil, tail
+			}
+			matches, err := client.Complete(name, remote.Directory(), prefix)
+			if err != nil {
+				return head, nil, tail
+			}
+			safe := matches[:0]
+			for _, match := range matches {
+				if escaped := escapeCompletion(match); escaped != "" {
+					safe = append(safe, escaped)
+				}
+			}
+			return head[:start], safe, tail
+		})
+		editing, _ = liner.TerminalMode()
+		if original != nil {
+			_ = original.ApplyMode()
+		}
 	}
-	if len(a) > 2 && a[2] == "--connect" {
-		saved, err := findSession("", a[0], a[1])
+	for {
+		var line string
+		var err error
+		if editor != nil {
+			if editing != nil {
+				_ = editing.ApplyMode()
+			}
+			line, err = editor.Prompt(promptLabel(name, home, remote.Directory()))
+			if original != nil {
+				_ = original.ApplyMode()
+			}
+			if errors.Is(err, liner.ErrPromptAborted) {
+				fmt.Fprintln(output)
+				continue
+			}
+		} else {
+			fmt.Fprint(output, promptLabel(name, home, remote.Directory()))
+			line, err = input.ReadString('\n')
+			if errors.Is(err, io.EOF) && line != "" {
+				err = nil
+			}
+		}
+		if errors.Is(err, io.EOF) {
+			fmt.Fprintln(output, "[rmt is exiting]")
+			return nil
+		}
 		if err != nil {
-			log.Fatal("rmt: ", err)
+			return err
 		}
-		if err = client.Connect(saved.Host, saved.Agent, a[3:], &saved); err != nil {
-			log.Fatal("rmt: ", err)
+		line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+		if strings.TrimSpace(line) == "" {
+			continue
 		}
-		return
-	}
-	if err := client.Connect(a[0], a[1], a[2:], nil); err != nil {
-		log.Fatal("rmt: ", err)
+		if editor != nil {
+			editor.AppendHistory(line)
+		}
+		cmd, err := shell.Parse(line)
+		if err != nil {
+			fmt.Fprintln(output, "rmt:", err)
+			continue
+		}
+		if cmd.Exit {
+			fmt.Fprintln(output, "[rmt is exiting]")
+			return nil
+		}
+		if cmd.Unsupported != "" {
+			fmt.Fprintf(output, "rmt: %s is not supported. Supported applications: opencode, codex.\n", cmd.Unsupported)
+			continue
+		}
+		if cmd.Program != "" {
+			signals := make(chan os.Signal, 1)
+			signal.Notify(signals, os.Interrupt)
+			err = client.Launch(ctx, name, cmd.Program, cmd.Args, remote)
+			signal.Stop(signals)
+		} else {
+			_, err = remote.Run(line, output)
+		}
+		if err != nil {
+			fmt.Fprintln(output, "rmt:", err)
+			var lost *client.ConnectionError
+			if cmd.Program == "" && errors.As(err, &lost) {
+				next, e := reconnect(name, remote, output)
+				if e != nil {
+					return e
+				}
+				remoteMu.Lock()
+				remote = next
+				remoteMu.Unlock()
+				continue
+			}
+			if cmd.Program == "" {
+				return err
+			}
+		}
 	}
 }

@@ -17,8 +17,8 @@ import (
 	"time"
 )
 
-// normalizeURL accepts only a direct HTTPS host without paths or embedded credentials.
-func normalizeURL(raw string) (string, error) {
+// NormalizeURL accepts only a direct HTTPS host without paths or embedded credentials.
+func NormalizeURL(raw string) (string, error) {
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
 		return "", errors.New("address must be an HTTPS host and port, such as https://host:47473")
@@ -49,7 +49,7 @@ func noRedirect(*http.Request, []*http.Request) error { return errors.New("redir
 
 // Inspect reads an untrusted host identity without sending any credentials.
 func Inspect(ctx context.Context, raw string) (string, string, error) {
-	base, err := normalizeURL(raw)
+	base, err := NormalizeURL(raw)
 	if err != nil {
 		return "", "", err
 	}
@@ -80,7 +80,7 @@ func Inspect(ctx context.Context, raw string) (string, string, error) {
 
 // Pair sends the single-use code only to the fingerprint the user verified.
 func Pair(ctx context.Context, raw, fingerprint, code, name string) (Profile, error) {
-	base, err := normalizeURL(raw)
+	base, err := NormalizeURL(raw)
 	if err != nil {
 		return Profile{}, err
 	}
@@ -134,7 +134,7 @@ func (t bearerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 
 // Client returns a pinned, authenticated HTTP client for a paired host.
 func (p Profile) Client() (*http.Client, error) {
-	base, err := normalizeURL(p.URL)
+	base, err := NormalizeURL(p.URL)
 	if err != nil {
 		return nil, err
 	}
@@ -151,7 +151,7 @@ func (p Profile) Client() (*http.Client, error) {
 
 // Transport returns a pinned, authenticated transport for HTTP and WebSocket proxies.
 func (p Profile) Transport() (http.RoundTripper, error) {
-	if _, err := normalizeURL(p.URL); err != nil {
+	if _, err := NormalizeURL(p.URL); err != nil {
 		return nil, err
 	}
 	if strings.TrimSpace(p.Token) == "" {

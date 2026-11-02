@@ -1,4 +1,4 @@
-// Command rmt connects native agent terminals to workspaces on remote devices.
+// Command rmt connects native program terminals to remote devices.
 package main
 
 import "github.com/fschrhunt/rmt/src/cli"

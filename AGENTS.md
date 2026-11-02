@@ -1,7 +1,7 @@
 # Developing rmt
 
-rmt connects native agent terminals to backends on another device. It is a small Go
-program; keep native agent interfaces intact, preserve running work and credentials, and avoid
+rmt connects native program terminals to backends on another device. It is a small Go
+program; keep native program interfaces intact, preserve running work and credentials, and avoid
 configuration or abstractions beyond what a change needs.
 
 ## Commands
@@ -16,23 +16,23 @@ configuration or abstractions beyond what a change needs.
 
 ## Where things live
 
-- `main.go`: command entry point.
-- `src/cli/`: command dispatch, interactive setup, pairing, and terminal output.
-- `src/client/`: host connections and session discovery.
-- `src/host/`: host lifecycle and agent supervision.
-- `src/agent/`: native OpenCode and Codex interfaces and session APIs.
-- `src/session/`: session data, names, and selection.
-- `src/config/`: user configuration and workspace settings.
-- `src/network/`: paired HTTPS, private device credentials and optional Tailscale integration.
-- `src/service/`: macOS and Linux user service installation.
+- `src/cmd/rmt/main.go`: command entry point.
+- `src/cli/`: command dispatch, local prompt, and pairing.
+- `src/client/`: host connections and native application launches.
+- `src/hosts/`: host lifecycle and program supervision.
+- `src/programs/`: native OpenCode and Codex interfaces.
+- `src/shell/`: host command protocol and local command parsing.
+- `src/config/`: user configuration.
+- `src/network/`: paired HTTPS and private device credentials.
+- `src/services/`: automatic user service installation.
 - `*_test.go`: offline behavior tests next to the code they cover.
 - `README.md`: installation, usage, security boundaries and operational limitations.
 
 ## Conventions
 
 - Run `./x check` before finishing changes. Tests protect meaningful behavior and run offline;
-  never depend on a live Tailscale network, real agents, or model accounts.
-- Treat authentication, workspace selection, proxy behavior, and running host services as part of
+  never depend on a live Tailscale network, real programs, or model accounts.
+- Treat authentication, command execution, proxy behavior, and running host services as part of
   the user-facing contract. Do not restart installed services while testing without a reason.
 - Update the README and `CHANGELOG.md` when behavior changes. Keep comments accurate and focused
   on purpose and contract.

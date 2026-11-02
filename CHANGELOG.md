@@ -2,19 +2,25 @@
 
 ## Unreleased
 
-- Support paired HTTPS over reachable IP networks without requiring Tailscale; retain the existing
-  Tailscale connection path for current users.
-- Organize source packages by CLI, client, host, agent, session, config, network, and service.
-- Authenticate local agent bridges and Codex's loopback WebSocket backend.
-- Restart failed agents independently and include agent errors in host diagnostics.
-- Refuse ambiguous session selection when a device could not be checked.
-- Offer background service installation during setup on macOS and Linux.
-- Add an MIT license and the planned GitHub module path.
-- Add interactive setup for the host workspace, enabled agents, and optional native sign-in.
-- Rename the product and executable to `rmt`, and allow each host to configure its workspace.
-- Start the local OpenCode client from any directory without requiring a local `~/dev`.
-- Use simple animal names for remote session handles while keeping earlier handles usable.
+- Attach to the native OpenCode service and Codex managed app-server without stopping them when
+  a terminal disconnects. Let remote shell commands already in progress finish on disconnect.
 
-- List saved OpenCode and Codex sessions across reachable hosts and reconnect using stable short names.
+- Start the local host service automatically on first use on macOS and systemd-based Linux.
+- Keep shell state and running commands during short network interruptions; bound buffered output
+  and bind reconnects to the original paired device.
+- Check supported program capabilities on the client and host, and organize packages as hosts and programs.
 
-- Run native OpenCode and Codex interfaces against a host on your Tailscale network, starting in the host's `~/dev`.
+- Use TOML for editable settings and retain pairing identities when host names change.
+- Show the host directory, print an exit message, restore the directory on reconnect without
+  replaying commands, and reject incompatible protocol versions.
+- Preserve shell exit status, rate-limit pairing attempts, and report unavailable backends.
+
+- Rename the `agents` configuration field to `programs` and remove old compatibility paths.
+
+- Replace workspace and session management commands with `rmt <host>`, a locally edited prompt
+  running commands in a persistent shell on the host, starting in its home directory.
+- Launch native OpenCode and Codex interfaces in the current remote directory.
+- Pair automatically on first connection using a fingerprint and an owner-only one-time code;
+  configure host addresses, listeners, and programs in JSON.
+- Reload the private device registry so removing a paired client revokes active access.
+- Move the command entry point to `src/cmd/rmt`.
