@@ -7,10 +7,11 @@ cd "$(dirname "$0")"
 usage() {
     cat <<'USAGE'
 usage: ./x [command] [args...]
-  check           Default; check formatting, run go vet and tests
+  check           Default; check formatting, vet, tests, and shell scripts
   fmt [--check]   Format Go files, or check formatting without changes
   lint            Run go vet
   test [args...]  Run go test (default: ./...)
+  shell           Run ShellCheck on repository shell scripts
   build           Build dist/rmt without replacing the installed binary
   dev [args...]   Run this checkout with go run
   hooks           Install the repository's Git hook
@@ -23,11 +24,11 @@ invalid() { usage >&2; exit 2; }
 command=${1-check}
 if [ "$#" -gt 0 ]; then shift; fi
 case "$command" in
-    check|lint|build|hooks|help|--help|-h) [ "$#" -eq 0 ] || invalid ;;
+    check|lint|shell|build|hooks|help|--help|-h) [ "$#" -eq 0 ] || invalid ;;
     fmt) [ "$#" -eq 0 ] || { [ "$#" -eq 1 ] && [ "$1" = --check ]; } || invalid ;;
 esac
 case "$command" in
-    check) ./x fmt --check; ./x lint; ./x test ;;
+    check) ./x fmt --check; ./x lint; ./x test; ./x shell ;;
     fmt)
         if [ "${1:-}" = --check ]; then
             unformatted=$(gofmt -l .)
@@ -41,6 +42,10 @@ case "$command" in
         ;;
     lint) go vet ./... ;;
     test) if [ "$#" -eq 0 ]; then set -- ./...; fi; go test "$@" ;;
+    shell)
+        command -v shellcheck >/dev/null 2>&1 || { printf 'shellcheck is not on PATH\n' >&2; exit 2; }
+        shellcheck x .githooks/pre-commit
+        ;;
     build) mkdir -p dist; go build -o dist/rmt . ;;
     dev) exec go run . "$@" ;;
     hooks) git config core.hooksPath .githooks; printf 'Git hook installed.\n' ;;

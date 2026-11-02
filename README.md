@@ -87,6 +87,6 @@ still apply. Codex's remote app-server transport is experimental. Claude Code is
 
 ## Development
 
-Run `./x check` for formatting, vet, and tests. `./x build` creates `dist/rmt` without replacing
+Run `./x check` for formatting, vet, tests, and ShellCheck. `./x build` creates `dist/rmt` without replacing
 the installed binary or restarting a running host service. See [CONTRIBUTING.md](CONTRIBUTING.md)
 for the development workflow.
