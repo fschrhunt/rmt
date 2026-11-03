@@ -44,11 +44,16 @@ history, commits without passing main CI, missing or duplicate changelog section
 then runs `./x check`.
 It builds `rmt_vX.Y.Z_{darwin,linux}_{amd64,arm64}.tar.gz`, each containing an executable `rmt`
 and `LICENSE`, and verifies their contents, build targets, and `checksums.txt` before publishing
-a GitHub release with that version's changelog notes. It uses the automatic `GITHUB_TOKEN`;
-no additional secrets or manual workflow dispatch are needed. Rerun a failed workflow after
-resolving its cause; an existing release is never overwritten. Do not move published tags.
+a GitHub release with that version's changelog notes using the automatic `GITHUB_TOKEN`.
+The formula job uses the repository's `RELEASE_TOKEN` Actions secret to open a PR containing
+`rmt.rb`; review and merge that PR after CI passes. The token needs access to this repository
+with Contents and Pull requests read/write. Keep it in GitHub Actions secrets, never in the
+repository. The formula job skips older releases and refuses to overwrite an existing release
+branch; if a retry reports an existing branch, inspect that branch and PR before changing it.
+Rerun a failed workflow after resolving its cause; an existing release is never overwritten.
+Do not move published tags.
 
-While this repository is private, releases and downloads require GitHub access to the repository;
+If this repository is private, releases and downloads require GitHub access to the repository;
 they cannot serve as anonymous public downloads. Download assets from the release page or with
 authenticated `gh release download v1.2.3 --repo fschrhunt/rmt`. After downloading the chosen
 archive and `checksums.txt`, check its SHA-256 against the matching line (`sha256sum` on Linux,

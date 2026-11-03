@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Prepare a checksum-verified installer and Homebrew formula updates for release distribution.
+- Move extension examples under `docs/examples/`.
 - Publish verified macOS/Linux amd64/arm64 archives and SHA-256 checksums from stable version
   tags on `main`, with GitHub release notes from this changelog.
 - Move the entry point to the repository root and settings and pairing state to `~/.rmt`.

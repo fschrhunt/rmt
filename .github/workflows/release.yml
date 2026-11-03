@@ -120,3 +120,46 @@ jobs:
           test -s "$RUNNER_TEMP/release-notes.md"
           gh release create "$TAG" dist/*.tar.gz dist/checksums.txt \
             --verify-tag --title "$TAG" --notes-file "$RUNNER_TEMP/release-notes.md"
+
+  formula:
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    concurrency:
+      group: homebrew-formula
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Propose the Homebrew formula
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          [ -n "$GH_TOKEN" ] || { echo 'Set RELEASE_TOKEN in repository Actions secrets.' >&2; exit 1; }
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
+          [ "$TAG" = "$latest" ] || { echo 'A newer release exists; skipping the formula.'; exit 0; }
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern checksums.txt --output "$RUNNER_TEMP/checksums.txt"
+          scripts/formula.sh "$TAG" "$RUNNER_TEMP/checksums.txt" > rmt.rb
+          git add -- rmt.rb
+          git diff --cached --quiet && exit 0
+          branch="release/formula-$TAG"
+          ref="refs/heads/$branch"
+          gh auth setup-git
+          remote=$(git ls-remote --heads origin "$ref")
+          [ -z "$remote" ] || { echo "Branch $branch already exists; inspect it before retrying." >&2; exit 1; }
+          git switch -c "$branch"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git -c core.hooksPath=/dev/null commit -m "release: update Homebrew formula for $TAG"
+          git push --force-with-lease="$ref:" origin "HEAD:$ref"
+          gh pr create --base main --head "$branch" \
+            --title "release: update Homebrew formula for $TAG" \
+            --body "Update the Homebrew formula using the published release checksums. Review and merge after CI passes."

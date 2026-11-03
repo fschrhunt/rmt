@@ -18,6 +18,26 @@ to disconnect; rmt prints `[rmt is exiting]`. Exiting the native program or clos
 disconnects that client. OpenCode and Codex keep control of their own managed services and saved
 sessions. The rmt host service stays available for other devices.
 
+## Installation
+
+Build rmt with `./x build` and put `dist/rmt` in a permanent directory on your `PATH`. Once a
+release and its Homebrew formula are published, these installation routes are available when
+the repository is public:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/fschrhunt/rmt/main/install.sh | sh
+```
+
+```sh
+brew tap fschrhunt/rmt https://github.com/fschrhunt/rmt
+brew install fschrhunt/rmt/rmt
+```
+
+The installer verifies the downloaded archive's checksum; run it again to update. Homebrew
+installations are updated with `brew upgrade rmt`. Replacing the binary does not restart a
+running host service. See [release instructions](CONTRIBUTING.md#releases) for private releases
+and checksums.
+
 ## Configuration
 
 Settings live in `~/.rmt/settings.toml`. Create the file on each machine as needed. All fields are optional:
@@ -110,7 +130,7 @@ period; reconnecting the native interface after a longer interruption may requir
 
 Put trusted Lua files in `~/.rmt/extensions/` to prepare launches or register custom native
 programs. Extensions run on the device where they are installed. See the
-[extension guide](docs/extensions.md) and [examples](examples/extensions/) for the API and
+[extension guide](docs/extensions.md) and [examples](docs/examples/extensions/) for the API and
 client/host setup.
 
 Run `rmt help` for the short usage. See [CONTRIBUTING.md](CONTRIBUTING.md) for development.
