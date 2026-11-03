@@ -53,7 +53,7 @@ func newReleaseFixture(t *testing.T, changelog string) *releaseFixture {
 	if err := os.Mkdir(filepath.Join(repo, "scripts"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	script, err := os.ReadFile("../release.sh")
+	script, err := os.ReadFile("../scripts/release.sh")
 	if err != nil {
 		t.Fatal(err)
 	}

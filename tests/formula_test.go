@@ -33,10 +33,10 @@ func runFormula(t *testing.T, tag, sums string) (string, string, error) {
 // formulaCommand captures stdout separately to verify failures never emit partial Ruby.
 func formulaCommand(args ...string) (string, string, error) {
 	// Go's test cache cannot observe file reads performed by the shell subprocess.
-	if _, err := os.ReadFile("../formula.sh"); err != nil {
+	if _, err := os.ReadFile("../scripts/formula.sh"); err != nil {
 		return "", "", err
 	}
-	cmd := exec.Command("sh", append([]string{"../formula.sh"}, args...)...)
+	cmd := exec.Command("sh", append([]string{"../scripts/formula.sh"}, args...)...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
