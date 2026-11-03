@@ -16,13 +16,14 @@ configuration or abstractions beyond what a change needs.
 
 ## Where things live
 
-- `src/cmd/rmt/main.go`: command entry point.
+- `main.go`: command entry point.
 - `src/cli/`: command dispatch, local prompt, and pairing.
 - `src/client/`: host connections and native application launches.
 - `src/hosts/`: host lifecycle and program supervision.
 - `src/programs/`: native OpenCode and Codex interfaces.
 - `src/shell/`: host command protocol and local command parsing.
 - `src/config/`: user configuration.
+- `src/extensions/`: extension loading, runtime, and program definitions.
 - `src/network/`: paired HTTPS and private device credentials.
 - `src/services/`: automatic user service installation.
 - `*_test.go`: offline behavior tests next to the code they cover.

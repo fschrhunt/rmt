@@ -28,6 +28,20 @@ func TestParseRoutesProgramsWithoutChangingOrdinaryHostCommands(t *testing.T) {
 	}
 }
 
+// TestParseRoutesExtensionProgram includes explicitly registered programs in native routing.
+func TestParseRoutesExtensionProgram(t *testing.T) {
+	for _, name := range []string{"demo", "pi"} {
+		got, err := Parse(name+" --flag", name)
+		if err != nil || got.Program != name || got.Unsupported != "" {
+			t.Fatalf("%s: %+v %v", name, got, err)
+		}
+	}
+	got := AliasCommand("custom=demo\n", "custom", "demo")
+	if got.Program != "demo" {
+		t.Fatalf("extension alias: %+v", got)
+	}
+}
+
 // TestAliasCommand detects interactive programs through a host shell alias.
 func TestAliasCommand(t *testing.T) {
 	for _, output := range []string{"oc=opencode\n", "alias oc='opencode --model example'\n"} {

@@ -8,7 +8,7 @@ import (
 
 // TestConfigValidation rejects invalid settings before starting a host.
 func TestConfigValidation(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.toml")
+	path := filepath.Join(t.TempDir(), "settings.toml")
 	for _, data := range []string{`shell = "relative"`, `listen = "0.0.0.0:nope"`, `programs = []`, `unknown = true`, "[hosts]\nx='https://x'\nX='https://y'"} {
 		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
 			t.Fatal(err)
@@ -21,7 +21,7 @@ func TestConfigValidation(t *testing.T) {
 
 // TestReadPrograms checks the new editable configuration field.
 func TestReadPrograms(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.toml")
+	path := filepath.Join(t.TempDir(), "settings.toml")
 	if err := os.WriteFile(path, []byte(`serve = false
 programs = ["codex"]`), 0600); err != nil {
 		t.Fatal(err)

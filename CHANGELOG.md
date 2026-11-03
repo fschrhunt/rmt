@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Move the entry point to the repository root and settings and pairing state to `~/.rmt`.
+- Load trusted Lua extensions for launch preparation and custom HTTP or WebSocket program
+  integrations. Application flags pass through by default instead of assuming a worktree helper.
+
 - Start ordinary commands in the host's configured shell and load zsh or bash startup settings;
   prevent startup files from consuming the command stream and report unsupported interactive
   programs instead of attempting them without a terminal.

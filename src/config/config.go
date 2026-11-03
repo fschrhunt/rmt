@@ -7,11 +7,15 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/BurntSushi/toml"
 )
+
+var programName = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 
 // Config selects host listeners, native programs, and named remote addresses.
 type Config struct {
@@ -35,23 +39,29 @@ func (c Config) Enabled(program string) bool {
 	return false
 }
 
-// Path returns the per-user configuration path and home directory.
+// Path returns the per-user settings path and home directory. Any pre-~/.rmt
+// installation is migrated into ~/.rmt on first use.
 func Path() (string, string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return "", "", errors.New("cannot determine home directory")
 	}
-	root := os.Getenv("XDG_CONFIG_HOME")
-	if root == "" {
-		root = filepath.Join(home, ".config")
+	root := filepath.Join(home, ".rmt")
+	if err := migrate(legacyDir(home), root); err != nil {
+		return "", "", err
 	}
-	if !filepath.IsAbs(root) {
-		return "", "", errors.New("XDG_CONFIG_HOME must be an absolute path")
+	if info, err := os.Lstat(root); err == nil {
+		owner, ok := info.Sys().(*syscall.Stat_t)
+		if !info.IsDir() || info.Mode().Perm()&0077 != 0 || !ok || owner.Uid != uint32(os.Getuid()) {
+			return "", "", fmt.Errorf("%s must be an owner-only directory owned by this user", root)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", "", err
 	}
-	return filepath.Join(root, "rmt", "config.toml"), home, nil
+	return filepath.Join(root, "settings.toml"), home, nil
 }
 
-// Dir returns the directory containing the user's rmt configuration.
+// Dir returns ~/.rmt, which holds settings, identity, device and host files flat.
 func Dir() (string, error) {
 	path, _, err := Path()
 	if err != nil {
@@ -85,7 +95,7 @@ func Read(path string) (Config, error) {
 		}
 		seen := map[string]bool{}
 		for _, name := range c.Programs {
-			if (name != "opencode" && name != "codex") || seen[name] {
+			if !programName.MatchString(name) || seen[name] {
 				return c, fmt.Errorf("invalid config %s: unsupported or duplicate program %q", path, name)
 			}
 			seen[name] = true

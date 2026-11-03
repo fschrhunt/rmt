@@ -45,7 +45,7 @@ func pairHost(name, address string, reader *bufio.Reader, output io.Writer) erro
 		return r
 	}, remote)
 	fmt.Fprintf(output, "Host: %s\nVerification: %s\n", remote, fingerprint[:32])
-	fmt.Fprintln(output, "On the host, open ~/.config/rmt/pairing.json (or $XDG_CONFIG_HOME/rmt/pairing.json) and compare its verify value.")
+	fmt.Fprintln(output, "On the host, open ~/.rmt/pairing.json and compare its verify value.")
 	fmt.Fprint(output, "Do the verification values match? [y/N]: ")
 	answer, err := reader.ReadString('\n')
 	if err != nil {

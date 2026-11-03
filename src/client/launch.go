@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -17,121 +16,16 @@ import (
 	"time"
 
 	"github.com/fschrhunt/rmt/src/config"
+	"github.com/fschrhunt/rmt/src/extensions"
 	"github.com/fschrhunt/rmt/src/network"
 	"github.com/fschrhunt/rmt/src/programs"
 )
 
-// target holds a paired HTTPS connection.
-type target struct {
-	base    string
-	client  *http.Client
-	profile *network.Profile
-}
-
-// configuredAddress finds a host's optional address without changing its saved credential.
-func configuredAddress(cfg config.Config, name string) string {
-	for key, address := range cfg.Hosts {
-		if strings.EqualFold(key, name) {
-			return address
-		}
-	}
-	return ""
-}
-
-// findProfile keeps a saved identity when its configured host name changes.
-func findProfile(profiles map[string]network.Profile, name, address string) (network.Profile, bool, error) {
-	if p, ok := profiles[strings.ToLower(name)]; ok {
-		return p, true, nil
-	}
-	if address == "" {
-		return network.Profile{}, false, nil
-	}
-	normalized, err := network.NormalizeURL(address)
-	if err != nil {
-		return network.Profile{}, false, err
-	}
-	var found network.Profile
-	count := 0
-	for _, p := range profiles {
-		url, err := network.NormalizeURL(p.URL)
-		if err == nil && strings.EqualFold(url, normalized) {
-			found = p
-			count++
-		}
-	}
-	if count > 1 {
-		return network.Profile{}, false, fmt.Errorf("multiple saved identities match %s", name)
-	}
-	return found, count == 1, nil
-}
-
-// PairAddress returns an HTTPS address only when a host needs first-time pairing.
-func PairAddress(name string) (string, error) {
-	cfg, err := config.Load()
-	if err != nil {
-		return "", err
-	}
-	dir, err := config.Dir()
-	if err != nil {
-		return "", err
-	}
-	profiles, err := network.Profiles(dir)
-	if err != nil {
-		return "", err
-	}
-	if _, ok, err := findProfile(profiles, name, configuredAddress(cfg, name)); err != nil {
-		return "", err
-	} else if ok {
-		return "", nil
-	}
-	if address := configuredAddress(cfg, name); address != "" {
-		return address, nil
-	}
-	if err := network.ValidateName(name); err != nil {
-		return "", err
-	}
-	return "https://" + net.JoinHostPort(name, "47473"), nil
-}
-
-// resolveTarget connects to a paired host.
-func resolveTarget(name string) (target, error) {
-	cfg, err := config.Load()
-	if err != nil {
-		return target{}, err
-	}
-	dir, err := config.Dir()
-	if err != nil {
-		return target{}, err
-	}
-	profiles, err := network.Profiles(dir)
-	if err != nil {
-		return target{}, err
-	}
-	profile, ok, err := findProfile(profiles, name, configuredAddress(cfg, name))
-	if err != nil {
-		return target{}, err
-	}
-	if ok {
-		if address := configuredAddress(cfg, name); address != "" {
-			profile.URL, err = network.NormalizeURL(address)
-			if err != nil {
-				return target{}, err
-			}
-		}
-		client, err := profile.Client()
-		if err != nil {
-			return target{}, err
-		}
-		return target{base: profile.URL, client: client, profile: &profile}, nil
-	}
-	return target{}, fmt.Errorf("host %q has not been paired", name)
-}
-
 // Launch opens a native program interface in the selected remote directory.
-func Launch(ctx context.Context, host, programName, line string, remote *Shell) error {
+func Launch(ctx context.Context, host, programName, line string, remote *Shell, registry *extensions.Registry) error {
 	dir := remote.Directory()
-	if programName != "opencode" && programName != "codex" {
-		return fmt.Errorf("unknown program %q (choose opencode or codex)", programName)
+	if programName != "opencode" && programName != "codex" && !registry.Has(programName) {
+		return fmt.Errorf("unknown program %q", programName)
 	}
 	target, e := resolveTarget(host)
 	if e != nil {
@@ -156,11 +50,13 @@ func Launch(ctx context.Context, host, programName, line string, remote *Shell) 
 	if problem := info.Problems[programName]; problem != "" {
 		return fmt.Errorf("%s: %s", host, problem)
 	}
-	if err := programs.Check(programName, false); err != nil {
-		return err
-	}
-	if local, remote := programs.Version(programName), info.Versions[programName]; local != "" && remote != "" && local != remote {
-		fmt.Fprintf(os.Stderr, "rmt: %s CLI versions differ (local %s, host %s); update them if the connection fails\n", programName, local, remote)
+	if programName == "opencode" || programName == "codex" {
+		if err := programs.Check(programName, false); err != nil {
+			return err
+		}
+		if local, remote := programs.Version(programName), info.Versions[programName]; local != "" && remote != "" && local != remote {
+			fmt.Fprintf(os.Stderr, "rmt: %s CLI versions differ (local %s, host %s); update them if the connection fails\n", programName, local, remote)
+		}
 	}
 	if !filepath.IsAbs(dir) {
 		return errors.New("host did not report an absolute current directory")
@@ -215,13 +111,16 @@ func Launch(ctx context.Context, host, programName, line string, remote *Shell) 
 		return fmt.Errorf("cannot prepare %s on %s: invalid host response (%s)", programName, host, prepared.Status)
 	}
 	dir, extra := launch.Directory, launch.Args
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/start", nil)
+	startContext, stopStart := signal.NotifyContext(ctx, os.Interrupt)
+	defer stopStart()
+	request, err := http.NewRequestWithContext(startContext, http.MethodPost, base+"/start", nil)
 	if err != nil {
 		return err
 	}
 	starter := *target.client
 	starter.Timeout = 25 * time.Second
 	response, err := starter.Do(request)
+	stopStart()
 	if err != nil {
 		return fmt.Errorf("cannot start %s on %s: %w", programName, host, err)
 	}
@@ -243,5 +142,8 @@ func Launch(ctx context.Context, host, programName, line string, remote *Shell) 
 		}
 		return programs.OpenCodeAt(endpoint, transport, dir, extra)
 	}
-	return programs.CodexDirect(*target.profile, base+"/proxy", dir, extra)
+	if programName == "codex" {
+		return programs.CodexDirect(*target.profile, base+"/proxy", dir, extra)
+	}
+	return programs.Custom(ctx, registry, *target.profile, base+"/proxy", programName, dir, extra)
 }

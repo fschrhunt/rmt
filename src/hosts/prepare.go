@@ -7,8 +7,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
+
+var programNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 
 // preparedProgram is the host directory and arguments selected for a native client.
 type preparedProgram struct {
@@ -17,11 +20,11 @@ type preparedProgram struct {
 	Output    string   `json:"output,omitempty"`
 }
 
-// prepareProgram expands arguments on the host and asks the worktree helper to prepare -w launches.
+// prepareProgram expands arguments on the host before starting a native client.
 // The shell function records the launch instead of starting a host-side interface.
 func (s *commandShell) prepareProgram(line, name string) (preparedProgram, error) {
 	var result preparedProgram
-	if name != "opencode" && name != "codex" {
+	if !programNamePattern.MatchString(name) {
 		return result, errors.New("unsupported program")
 	}
 	dir, err := os.MkdirTemp("", "rmt-launch-")
@@ -31,35 +34,15 @@ func (s *commandShell) prepareProgram(line, name string) (preparedProgram, error
 	defer os.RemoveAll(dir)
 	resultPath := filepath.Join(dir, "launch")
 	var output bytes.Buffer
-	function := name + `() {
+	function := `__rmt_program() {
   if [ -e ` + quoteShell(resultPath) + ` ]; then
     printf '%s\n' 'rmt: launch the program once per command' >&2
     return 1
   fi
-  __rmt_worktree=false
-  for __rmt_arg do
-    case "$__rmt_arg" in --) break ;; -w) __rmt_worktree=true ;; esac
-  done
-  if $__rmt_worktree; then
-    if ! command -v worktree >/dev/null 2>&1; then
-      printf '%s\n' 'rmt: -w requires a worktree helper supporting --prepare on the host' >&2
-      return 127
-    fi
-    if \worktree --prepare ` + name + ` "$@" > ` + quoteShell(resultPath) + `; then
-      return 0
-    else
-      __rmt_status=$?
-      if [ "$__rmt_status" -eq 127 ]; then
-        printf '%s\n' 'rmt: update the host worktree helper to a version supporting --prepare' >&2
-      fi
-      return "$__rmt_status"
-    fi
-  else
-    { command printf '%s\0' "$(pwd -P)"; if [ "$#" -gt 0 ]; then command printf '%s\0' "$@"; fi; } > ` + quoteShell(resultPath) + `
-  fi
+  { command printf '%s\0' "$(pwd -P)"; if [ "$#" -gt 0 ]; then command printf '%s\0' "$@"; fi; } > ` + quoteShell(resultPath) + `
 }`
-	// Parse the function only after removing a same-named alias in the subshell.
-	command := "( unalias " + name + " 2>/dev/null || :\neval " + quoteShell(function) + "\neval " + quoteShell(line) + "\n)"
+	// Use a portable function name and alias the requested program to it in the subshell.
+	command := "( unalias " + name + " 2>/dev/null || :\neval " + quoteShell(function) + "\nalias " + quoteShell(name+"=__rmt_program") + "\neval " + quoteShell(line) + "\n)"
 	_, status, err := s.Run(command, func(data []byte) error {
 		if remaining := (1 << 20) - output.Len(); remaining > 0 {
 			if len(data) > remaining {
@@ -94,4 +77,58 @@ func (s *commandShell) prepareProgram(line, name string) (preparedProgram, error
 	}
 	result.Directory, result.Args = fields[0], fields[1:]
 	return result, nil
+}
+
+// runExtension executes a host preparation command with the prompt's shell environment.
+func (s *commandShell) runExtension(directory string, args []string) (string, string, int, error) {
+	if len(args) == 0 || args[0] == "" {
+		return "", "", 0, errors.New("extension command is empty")
+	}
+	if !filepath.IsAbs(directory) {
+		return "", "", 0, errors.New("extension directory must be absolute")
+	}
+	dir, err := os.MkdirTemp("", "rmt-extension-")
+	if err != nil {
+		return "", "", 0, err
+	}
+	defer os.RemoveAll(dir)
+	file := filepath.Join(dir, "stdout")
+	words := make([]string, len(args))
+	for i, arg := range args {
+		if strings.ContainsRune(arg, 0) {
+			return "", "", 0, errors.New("extension command contains a NUL byte")
+		}
+		words[i] = quoteShell(arg)
+	}
+	var stderr bytes.Buffer
+	tooLarge := false
+	command := "( cd " + quoteShell(directory) + " && " + strings.Join(words, " ") + " ) > " + quoteShell(file)
+	_, status, err := s.Run(command, func(data []byte) error {
+		remaining := (1 << 20) - stderr.Len()
+		if len(data) > remaining {
+			data = data[:remaining]
+			tooLarge = true
+		}
+		_, _ = stderr.Write(data)
+		return nil
+	})
+	if err != nil {
+		return "", stderr.String(), status, err
+	}
+	if tooLarge {
+		return "", stderr.String(), status, errors.New("extension command output is too large")
+	}
+	f, err := os.Open(file)
+	if err != nil {
+		return "", stderr.String(), status, err
+	}
+	data, err := io.ReadAll(io.LimitReader(f, (1<<20)+1))
+	_ = f.Close()
+	if err != nil {
+		return "", stderr.String(), status, err
+	}
+	if len(data) > 1<<20 {
+		return "", stderr.String(), status, errors.New("extension command output is too large")
+	}
+	return string(data), stderr.String(), status, nil
 }

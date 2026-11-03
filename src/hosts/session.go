@@ -13,6 +13,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 	"github.com/fschrhunt/rmt/src/config"
+	"github.com/fschrhunt/rmt/src/extensions"
 	"github.com/fschrhunt/rmt/src/network"
 	"github.com/fschrhunt/rmt/src/shell"
 )
@@ -23,6 +24,7 @@ type shellSessions struct {
 	authorized      func(string) bool
 	enabled         func(string) bool
 	problems        map[string]string
+	extensions      *extensions.Registry
 	mu              sync.Mutex
 	sessions        map[string]*shellSession
 	grace           time.Duration
@@ -36,6 +38,8 @@ type shellSession struct {
 	sh                        *commandShell
 	program                   *programBackend
 	starting                  bool
+	preparedDirectory         string
+	preparedName              string
 	mu                        sync.Mutex
 	changed                   chan struct{}
 	events                    []shell.Event
