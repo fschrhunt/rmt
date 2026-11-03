@@ -16,7 +16,6 @@ import (
 	"github.com/coder/websocket"
 )
 
-// TestPairingPinsIdentityAndConsumesCode protects the pairing and credential boundary.
 func TestPairingPinsIdentityAndConsumesCode(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "rmt")
 	h, err := NewHost(dir)
@@ -85,7 +84,6 @@ func TestPairingPinsIdentityAndConsumesCode(t *testing.T) {
 	}
 }
 
-// TestRevocationClosesWebSocket confirms a paired device cannot keep an existing session open.
 func TestRevocationClosesWebSocket(t *testing.T) {
 	h, err := NewHost(filepath.Join(t.TempDir(), "rmt"))
 	if err != nil {
@@ -136,7 +134,6 @@ func TestRevocationClosesWebSocket(t *testing.T) {
 	}
 }
 
-// TestProfilesArePrivateAndDoNotOverwrite protects stored device credentials.
 func TestProfilesArePrivateAndDoNotOverwrite(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "rmt")
 	profile := Profile{URL: "https://example.test:47473", Fingerprint: strings.Repeat("a", 64), Token: "test"}
@@ -196,7 +193,6 @@ func TestLocalControlIsPrivate(t *testing.T) {
 	}
 }
 
-// TestPairingCodeCanOnlyBeUsedOnceConcurrently prevents multiple devices claiming one code.
 func TestPairingCodeCanOnlyBeUsedOnceConcurrently(t *testing.T) {
 	h, err := NewHost(filepath.Join(t.TempDir(), "rmt"))
 	if err != nil {

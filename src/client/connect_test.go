@@ -5,7 +5,6 @@ import (
 	"testing"
 )
 
-// TestRenamedHostKeepsIdentity associates a new local name with the same address.
 func TestRenamedHostKeepsIdentity(t *testing.T) {
 	profiles := map[string]network.Profile{"old": {URL: "https://example.test:47473", Token: "saved"}}
 	got, ok, err := findProfile(profiles, "new", "https://example.test:47473/")

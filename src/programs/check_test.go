@@ -7,7 +7,6 @@ import (
 	"testing"
 )
 
-// TestCheckReportsUnsupportedFlags checks that incompatible clients are rejected clearly.
 func TestCheckReportsUnsupportedFlags(t *testing.T) {
 	dir := t.TempDir()
 	binary := filepath.Join(dir, "opencode")

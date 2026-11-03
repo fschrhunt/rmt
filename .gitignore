@@ -5,9 +5,13 @@
 *.log
 .DS_Store
 
-# Agent worktrees
-/.claude/worktrees/
-/.codex/worktrees/
-/.opencode/worktrees/
-/.pi/worktrees/
-/.ask/worktrees/
+.claude/
+.codex/
+.opencode/
+.pi/
+.ask/
+
+.env
+.env.*
+!.env.example
+!.env.*.example

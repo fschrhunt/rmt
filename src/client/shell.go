@@ -44,7 +44,6 @@ type Shell struct {
 // OpenShell connects to the selected host and returns its home directory.
 func OpenShell(host string) (*Shell, error) { return openShell(host, "", 0) }
 
-// openShell attaches to a new or previously created remote shell.
 func openShell(host, session string, after uint64) (*Shell, error) {
 	target, err := resolveTarget(host)
 	if err != nil {

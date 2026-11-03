@@ -123,7 +123,6 @@ func TestActiveProgramSurvivesControlDisconnect(t *testing.T) {
 	}
 }
 
-// TestProgramEndpointRejectsOtherDevices protects session-owned connections.
 func TestProgramEndpointRejectsOtherDevices(t *testing.T) {
 	manager := shellHandler(t.TempDir(), "")
 	defer manager.Close()
@@ -220,7 +219,6 @@ func TestHostExtensionCommandStopsOnCancellation(t *testing.T) {
 	}
 }
 
-// TestOpenCodeDisabledRespectsNativePreference does not enable an explicitly disabled service.
 func TestOpenCodeDisabledRespectsNativePreference(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "opencode")
