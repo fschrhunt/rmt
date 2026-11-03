@@ -20,10 +20,8 @@ checkout. Rebuilding does not restart an installed host service.
 Tests should protect meaningful behavior and run offline. Never include credentials, prompts,
 or other private data in issue reports. Update the README and changelog when behavior changes.
 
-GitHub Actions checks pull requests on Linux and macOS. A weekly workflow proposes compatible
-Go dependency updates after running checks; Dependabot proposes GitHub Actions updates separately.
-Review and merge these pull requests normally. If an update branch exists without its automation
-PR, inspect it before deleting it and retrying the workflow.
+GitHub Actions checks pull requests on Linux and macOS. Dependabot proposes weekly grouped Go
+patch and GitHub Actions updates; security updates are separate. Review them after CI passes.
 
 For bug reports, include the operating system, command, expected behavior, and what happened.
 Redact private paths, prompts, tokens, and other sensitive details before sharing output.

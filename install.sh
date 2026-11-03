@@ -15,7 +15,6 @@ version=
 work=
 pending=
 
-# Report a failed install before replacing the destination binary.
 fail() { printf 'rmt install: %s\n' "$*" >&2; exit 1; }
 
 # Remove only the private download directory and our unique destination file.

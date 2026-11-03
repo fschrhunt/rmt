@@ -22,7 +22,6 @@ func TestServiceDefinitionsPreservePaths(t *testing.T) {
 	}
 }
 
-// TestNativePathsExcludesSecrets carries configuration locations without copying credentials.
 func TestNativePathsExcludesSecrets(t *testing.T) {
 	t.Setenv("CODEX_HOME", "/custom/codex")
 	t.Setenv("OPENAI_API_KEY", "secret-value")

@@ -119,7 +119,6 @@ func TestResumeDistinguishesBusyFromExpired(t *testing.T) {
 	}
 }
 
-// TestShellSessionIsBoundToDevice prevents a paired device from attaching another device's shell.
 func TestShellSessionIsBoundToDevice(t *testing.T) {
 	manager := shellHandler(t.TempDir(), "")
 	defer manager.Close()
@@ -238,7 +237,6 @@ func TestNetworkTimeoutLetsRunningCommandFinish(t *testing.T) {
 	t.Fatal("running command was interrupted after the reconnect window expired")
 }
 
-// TestWindowExitDoesNotKillBackgroundJobs preserves work launched by the host shell.
 func TestWindowExitDoesNotKillBackgroundJobs(t *testing.T) {
 	dir := t.TempDir()
 	manager := shellHandler(dir, "")

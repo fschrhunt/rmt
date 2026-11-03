@@ -1,5 +1,18 @@
 version: 2
 updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '09:00'
+    allow:
+      - dependency-type: all
+        update-types: ["version-update:semver-patch"]
+    groups:
+      go:
+        applies-to: version-updates
+        patterns: ['*']
   - package-ecosystem: github-actions
     directory: /
     schedule:

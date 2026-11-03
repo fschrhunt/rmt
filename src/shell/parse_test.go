@@ -2,7 +2,6 @@ package shell
 
 import "testing"
 
-// TestParseRoutesProgramsWithoutChangingOrdinaryHostCommands protects the local/native boundary.
 func TestParseRoutesProgramsWithoutChangingOrdinaryHostCommands(t *testing.T) {
 	cases := []struct {
 		line, program, unsupported string
@@ -28,7 +27,6 @@ func TestParseRoutesProgramsWithoutChangingOrdinaryHostCommands(t *testing.T) {
 	}
 }
 
-// TestParseRoutesExtensionProgram includes explicitly registered programs in native routing.
 func TestParseRoutesExtensionProgram(t *testing.T) {
 	for _, name := range []string{"demo", "pi"} {
 		got, err := Parse(name+" --flag", name)

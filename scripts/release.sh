@@ -2,7 +2,6 @@
 # Prepare a reviewed changelog release, then ask Actions to tag a checked main commit.
 set -eu
 
-# Stop before changing branches or dispatching a release when a precondition fails.
 fail() { printf 'release: %s\n' "$*" >&2; exit 1; }
 [ "$#" -eq 1 ] || fail 'usage: scripts/release.sh vX.Y.Z'
 tag=$1

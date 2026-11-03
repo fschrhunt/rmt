@@ -2,7 +2,6 @@
 # Build and verify the four release archives and their SHA-256 checksums.
 set -eu
 
-# Stop before packaging when the release version or output directory is invalid.
 fail() { printf 'package: %s\n' "$*" >&2; exit 1; }
 [ "$#" -eq 2 ] || fail 'usage: scripts/package.sh vX.Y.Z OUTPUT_DIRECTORY'
 tag=$1

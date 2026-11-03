@@ -10,14 +10,12 @@ import (
 	"github.com/fschrhunt/rmt/src/network"
 )
 
-// target holds a paired HTTPS connection.
 type target struct {
 	base    string
 	client  *http.Client
 	profile *network.Profile
 }
 
-// configuredAddress finds a host's optional address without changing its saved credential.
 func configuredAddress(cfg config.Config, name string) string {
 	for key, address := range cfg.Hosts {
 		if strings.EqualFold(key, name) {
@@ -82,7 +80,6 @@ func PairAddress(name string) (string, error) {
 	return "https://" + net.JoinHostPort(name, "47473"), nil
 }
 
-// resolveTarget connects to a paired host.
 func resolveTarget(name string) (target, error) {
 	cfg, err := config.Load()
 	if err != nil {

@@ -22,7 +22,6 @@ import (
 	"github.com/peterh/liner"
 )
 
-// promptLabel shows the host and directory without consulting the network.
 func promptLabel(name, home, directory string) string {
 	dir := directory
 	if dir == home {
