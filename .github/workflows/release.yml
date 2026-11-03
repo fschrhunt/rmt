@@ -77,6 +77,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 0
       - name: Validate tag and changelog
@@ -124,13 +125,17 @@ jobs:
 
   release:
     needs: check
+    if: github.repository == 'fschrhunt/rmt' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -140,6 +145,16 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: scripts/package.sh "$TAG" dist
+      - name: Attest release artifacts
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          create-storage-record: false
+          subject-path: |
+            dist/rmt_${{ github.ref_name }}_darwin_amd64.tar.gz
+            dist/rmt_${{ github.ref_name }}_darwin_arm64.tar.gz
+            dist/rmt_${{ github.ref_name }}_linux_amd64.tar.gz
+            dist/rmt_${{ github.ref_name }}_linux_arm64.tar.gz
+            dist/checksums.txt
       - name: Publish release with changelog notes
         env:
           GH_TOKEN: ${{ github.token }}
@@ -147,7 +162,9 @@ jobs:
         run: |
           awk -v tag="$TAG" '/^## / { section = ($2 == tag); next } section' CHANGELOG.md > "$RUNNER_TEMP/release-notes.md"
           test -s "$RUNNER_TEMP/release-notes.md"
-          gh release create "$TAG" dist/*.tar.gz dist/checksums.txt \
+          gh release create "$TAG" \
+            "dist/rmt_${TAG}_darwin_amd64.tar.gz" "dist/rmt_${TAG}_darwin_arm64.tar.gz" \
+            "dist/rmt_${TAG}_linux_amd64.tar.gz" "dist/rmt_${TAG}_linux_arm64.tar.gz" dist/checksums.txt \
             --verify-tag --title "$TAG" --notes-file "$RUNNER_TEMP/release-notes.md"
 
   formula:
@@ -156,6 +173,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+      attestations: read
     concurrency:
       group: homebrew-formula
       cancel-in-progress: false
@@ -167,28 +185,33 @@ jobs:
           persist-credentials: false
       - name: Propose the Homebrew formula
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          [ -n "$GH_TOKEN" ] || { echo 'Set RELEASE_TOKEN in repository Actions secrets.' >&2; exit 1; }
+          [ -n "$RELEASE_TOKEN" ] || { echo 'Set RELEASE_TOKEN in repository Actions secrets.' >&2; exit 1; }
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main
           latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
           [ "$TAG" = "$latest" ] || { echo 'A newer release exists; skipping the formula.'; exit 0; }
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern checksums.txt --output "$RUNNER_TEMP/checksums.txt"
+          gh attestation verify "$RUNNER_TEMP/checksums.txt" --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+            --source-ref "refs/tags/$TAG" --source-digest "$GITHUB_SHA" --deny-self-hosted-runners
           scripts/formula.sh "$TAG" "$RUNNER_TEMP/checksums.txt" > rmt.rb
+          ruby -c rmt.rb
           git add -- rmt.rb
           git diff --cached --quiet && exit 0
           branch="release/formula-$TAG"
           ref="refs/heads/$branch"
-          gh auth setup-git
-          remote=$(git ls-remote --heads origin "$ref")
+          remote=$(git -c credential.helper= -c 'credential.helper=!gh auth git-credential' ls-remote --heads origin "$ref")
           [ -z "$remote" ] || { echo "Branch $branch already exists; inspect it before retrying." >&2; exit 1; }
           git switch -c "$branch"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git -c core.hooksPath=/dev/null commit -m "release: update Homebrew formula for $TAG"
-          git push --force-with-lease="$ref:" origin "HEAD:$ref"
-          gh pr create --base main --head "$branch" \
+          GH_TOKEN="$RELEASE_TOKEN" git -c credential.helper= -c 'credential.helper=!gh auth git-credential' \
+            push --force-with-lease="$ref:" origin "HEAD:$ref"
+          GH_TOKEN="$RELEASE_TOKEN" gh pr create --base main --head "$branch" \
             --title "release: update Homebrew formula for $TAG" \
-            --body "Update the Homebrew formula using the published release checksums. Review and merge after CI passes."
+            --body "Update the Homebrew formula using the attested release checksums. Review and merge after CI passes."

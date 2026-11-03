@@ -2,7 +2,12 @@
 
 ## Unreleased
 
-- Use Dependabot for weekly Go dependency updates.
+- Add paired loopback client–host validation and opt-in shell startup and command latency
+  benchmarks; document native terminal checks and limits of the protocol fixtures.
+- Attest release archives and their checksum manifest with GitHub build provenance, verify the
+  manifest before proposing Homebrew updates, and publish only the four checksummed archives.
+- Refuse HTTP downgrades when installing from an HTTPS release URL.
+- Group Go dependency and GitHub Actions updates into one weekly pull request.
 - Require Go 1.27.3 or newer for builds and audit reachable vulnerabilities in CI; macOS builds
   require macOS 13 or newer.
 - Add a release preparation helper and check workflow syntax and release archives in CI.

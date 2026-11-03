@@ -35,10 +35,11 @@ brew tap fschrhunt/rmt https://github.com/fschrhunt/rmt
 brew install fschrhunt/rmt/rmt
 ```
 
-The installer verifies the downloaded archive's checksum; run it again to update. Homebrew
+The installer verifies the downloaded archive against `checksums.txt`; run it again to update. Homebrew
 installations are updated with `brew upgrade rmt`. Replacing the binary does not restart a
 running host service. See [release instructions](CONTRIBUTING.md#releases) for private releases
-and checksums.
+and optional GitHub provenance verification. Checksums detect corruption; the installer and
+Homebrew trust their download source and do not verify GitHub attestations themselves.
 
 ## Configuration
 
@@ -136,3 +137,5 @@ programs. Extensions run on the device where they are installed. See the
 client/host setup.
 
 Run `rmt help` for the short usage. See [CONTRIBUTING.md](CONTRIBUTING.md) for development.
+See [reliability validation](docs/validation.md) for client–host test coverage, opt-in loopback
+measurements and their limitations.

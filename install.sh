@@ -58,10 +58,15 @@ while [ "$#" -gt 0 ]; do
 done
 
 command -v curl >/dev/null 2>&1 || fail 'curl is required'
-case $releases in http://*|https://*) ;; *) fail 'RMT_RELEASES must be an HTTP(S) release URL' ;; esac
+# HTTPS releases must never redirect to plaintext. HTTP is opt-in for mirrors/tests.
+case $releases in
+    https://*) protocols='=https' ;;
+    http://*) protocols='=http,https' ;;
+    *) fail 'RMT_RELEASES must be an HTTP(S) release URL' ;;
+esac
 if [ -z "$version" ]; then
     # Pin all subsequent downloads to the tag reached by the latest redirect.
-    landing=$(curl -q -fsSLI --proto '=http,https' --proto-redir '=http,https' \
+    landing=$(curl -q -fsSLI --proto "$protocols" --proto-redir "$protocols" \
         -o /dev/null -w '%{url_effective}' -- "$releases/latest") ||
         fail 'could not resolve latest release; private releases need access or an RMT_RELEASES mirror'
     version=${landing##*/}
@@ -101,9 +106,9 @@ case $tempdir in /*) ;; *) tempdir=$PWD/$tempdir ;; esac
 work=$(mktemp -d "$tempdir/rmt-install.XXXXXX") || fail 'could not create download directory'
 archive=rmt_${version}_${os}_${arch}.tar.gz
 
-# Ignore curl configuration and accept only HTTP(S), including redirects.
+# Ignore curl configuration and preserve the release URL's transport policy.
 fetch() {
-    curl -q -fsSL --proto '=http,https' --proto-redir '=http,https' -o "$2" -- "$1"
+    curl -q -fsSL --proto "$protocols" --proto-redir "$protocols" -o "$2" -- "$1"
 }
 printf 'Installing rmt %s for %s/%s\n' "$version" "$os" "$arch"
 fetch "$releases/download/$version/$archive" "$work/$archive" ||
