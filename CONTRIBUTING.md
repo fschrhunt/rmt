@@ -20,7 +20,7 @@ checkout. Rebuilding does not restart an installed host service.
 Tests should protect meaningful behavior and run offline. Never include credentials, prompts,
 or other private data in issue reports. Update the README and changelog when behavior changes.
 
-Dependabot groups dependency and GitHub Actions updates into one weekly pull request. Review changes and required checks before merging.
+Dependabot opens one weekly pull request for dependency and GitHub Actions updates. Review changes and required checks before merging.
 
 For bug reports, include the operating system, command, expected behavior, and what happened.
 Redact private paths, prompts, tokens, and other sensitive details before sharing output.
