@@ -20,8 +20,7 @@ checkout. Rebuilding does not restart an installed host service.
 Tests should protect meaningful behavior and run offline. Never include credentials, prompts,
 or other private data in issue reports. Update the README and changelog when behavior changes.
 
-GitHub Actions checks pull requests on Linux and macOS. Dependabot proposes weekly grouped Go
-patch and GitHub Actions updates; security updates are separate. Review them after CI passes.
+Dependabot groups dependency and GitHub Actions updates into one weekly pull request. Review changes and required checks before merging.
 
 For bug reports, include the operating system, command, expected behavior, and what happened.
 Redact private paths, prompts, tokens, and other sensitive details before sharing output.
@@ -46,13 +45,28 @@ then runs `./x check`.
 It builds `rmt_vX.Y.Z_{darwin,linux}_{amd64,arm64}.tar.gz`, each containing an executable `rmt`
 and `LICENSE`, and verifies their contents, build targets, and `checksums.txt` before publishing
 a GitHub release with that version's changelog notes using the automatic `GITHUB_TOKEN`.
+The release workflow attests the four archives and `checksums.txt` using GitHub provenance.
 The tag and formula jobs use the repository's `RELEASE_TOKEN` Actions secret to create the tag
 and open a PR containing `rmt.rb`; review and merge that PR after CI passes. The token needs access to this repository
 with Contents and Pull requests read/write. Keep it in GitHub Actions secrets, never in the
 repository. The formula job skips older releases and refuses to overwrite an existing release
 branch; if a retry reports an existing branch, inspect that branch and PR before changing it.
+Before generating the formula, it verifies the downloaded manifest's provenance against the
+release workflow, tag, and commit. Review the formula's URLs and hashes before merging.
 Rerun a failed workflow after resolving its cause; an existing release is never overwritten.
 Do not move published tags.
+
+To verify a downloaded archive (or `checksums.txt`) with a current, authenticated GitHub CLI:
+
+```sh
+gh attestation verify rmt_v1.2.3_linux_amd64.tar.gz --repo fschrhunt/rmt \
+  --signer-workflow fschrhunt/rmt/.github/workflows/release.yml \
+  --source-ref refs/tags/v1.2.3 --source-digest EXPECTED_COMMIT_SHA --deny-self-hosted-runners
+```
+
+Replace `EXPECTED_COMMIT_SHA` with the full release commit SHA you trust. This verifies the
+artifact and workflow identity; it does not establish that the source is safe. The installer and
+Homebrew verify checksums, but do not verify attestations.
 
 If this repository is private, releases and downloads require GitHub access to the repository;
 they cannot serve as anonymous public downloads. Download assets from the release page or with
@@ -61,5 +75,9 @@ archive and `checksums.txt`, check its SHA-256 against the matching line (`sha25
 `shasum -a 256` on macOS), then extract it and install `rmt` in a permanent directory on `PATH`.
 macOS binaries are unsigned and not notarized. Installing a release does not restart an existing
 host service.
+
+The installer trusts the release URL (including an explicit `RMT_RELEASES` mirror) for both the
+archive and manifest. HTTPS URLs cannot redirect to HTTP; setting an HTTP mirror explicitly opts
+into plaintext downloads. The installer checks checksums and archive structure, not attestations.
 
 By contributing you agree that your work is licensed under the project's MIT license.
