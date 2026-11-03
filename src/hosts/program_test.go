@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -71,6 +72,51 @@ esac
 
 	if data, err := os.ReadFile(calls); err == nil && len(data) > 0 {
 		t.Fatal("native service was started or stopped unnecessarily")
+	}
+}
+
+// TestActiveProgramSurvivesControlDisconnect retains the proxy while its native client is using it.
+func TestActiveProgramSurvivesControlDisconnect(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-release
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer backend.Close()
+	manager := shellHandler(t.TempDir(), "/bin/sh")
+	manager.grace = 40 * time.Millisecond
+	defer manager.Close()
+	session, _, err := manager.acquire("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := url.Parse(backend.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.program = &programBackend{name: "opencode", target: target}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		manager.serveProgram(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/program/"+session.token+"/opencode/proxy/events", nil))
+	}()
+	<-started
+	manager.detach(session)
+	time.Sleep(3 * manager.grace)
+	manager.mu.Lock()
+	retained := manager.sessions[session.token] == session
+	manager.mu.Unlock()
+	close(release)
+	<-done
+	if !retained {
+		t.Fatal("active native client lost its proxy")
+	}
+	select {
+	case <-session.sh.done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("idle shell remained after the native client disconnected")
 	}
 }
 

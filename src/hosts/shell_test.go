@@ -1,19 +1,50 @@
 package hosts
 
 import (
+	"bytes"
 	"context"
 	"net/http/httptest"
-
-	"bytes"
-	"github.com/coder/websocket"
-	"github.com/coder/websocket/wsjson"
-	"github.com/fschrhunt/rmt/src/shell"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/coder/websocket"
+	"github.com/coder/websocket/wsjson"
+	"github.com/fschrhunt/rmt/src/shell"
 )
+
+// TestCommandShellLoadsZshConfig makes host aliases and functions available at the prompt.
+func TestCommandShellLoadsZshConfig(t *testing.T) {
+	zsh, err := exec.LookPath("zsh")
+	if err != nil {
+		t.Skip("zsh is not installed")
+	}
+	home := t.TempDir()
+	home, err = filepath.EvalSymlinks(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELL", zsh)
+	t.Setenv("ZDOTDIR", home)
+	if err := os.WriteFile(filepath.Join(home, ".zshrc"), []byte("read -r ignored\ncd /\nalias greeting='printf hello'\ncustom() { printf 'function:%s' \"$1\"; }\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	sh, err := newCommandShell(home, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sh.Close()
+	for _, tc := range []struct{ command, want string }{{"greeting", "hello"}, {"custom world", "function:world"}} {
+		var output bytes.Buffer
+		dir, status, err := sh.Run(tc.command, func(data []byte) error { _, err := output.Write(data); return err })
+		if err != nil || status != 0 || output.String() != tc.want || dir != home {
+			t.Fatalf("%s: directory %q, output %q, status %d, error %v", tc.command, dir, output.String(), status, err)
+		}
+	}
+}
 
 // TestCommandShellPreservesState runs normal commands in the host's persistent shell.
 func TestCommandShellPreservesState(t *testing.T) {

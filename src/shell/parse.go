@@ -13,7 +13,7 @@ import (
 // Command describes a local native application, a host command, or an unsupported interactive app.
 type Command struct {
 	Program     string
-	Args        []string
+	Alias       string
 	Unsupported string
 	Exit        bool
 }
@@ -23,6 +23,7 @@ var interactive = map[string]bool{
 	"vi": true, "vim": true, "nvim": true, "nano": true, "emacs": true, "less": true, "more": true,
 	"top": true, "htop": true, "btop": true, "man": true, "tmux": true, "screen": true,
 	"ssh": true, "mosh": true, "sftp": true,
+	"claude": true, "pi": true,
 }
 
 // literal returns a shell word only when it does not need host-side expansion.
@@ -48,9 +49,18 @@ func literal(w *syntax.Word) (string, bool) {
 
 // Parse intercepts supported native clients and refuses known interactive programs.
 func Parse(line string) (Command, error) {
-	parsed, err := syntax.NewParser(syntax.Variant(syntax.LangPOSIX)).Parse(strings.NewReader(line), "")
+	parsed, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(line), "")
 	if err != nil {
-		return Command{}, fmt.Errorf("invalid shell command: %w", err)
+		// Let the host shell interpret syntax specific to its configured shell.
+		// Direct interactive launches must still pass the local routing checks.
+		words := strings.Fields(line)
+		if len(words) > 0 {
+			name := filepath.Base(words[0])
+			if name == "opencode" || name == "codex" || interactive[name] {
+				return Command{}, fmt.Errorf("invalid application command: %w", err)
+			}
+		}
+		return Command{}, nil
 	}
 	if len(parsed.Stmts) == 0 {
 		return Command{}, nil
@@ -66,6 +76,18 @@ func Parse(line string) (Command, error) {
 			return true
 		}
 		name := filepath.Base(value)
+		// `command -v` and `command -V` inspect a program without starting it.
+		if name == "command" {
+			for _, word := range call.Args[1:] {
+				option, ok := literal(word)
+				if !ok || option == "--" || !strings.HasPrefix(option, "-") {
+					break
+				}
+				if strings.ContainsAny(option[1:], "vV") {
+					return true
+				}
+			}
+		}
 		// Common launch wrappers do not turn an interactive program into a supported one.
 		if name == "sudo" || name == "command" || name == "env" || name == "exec" {
 			for _, word := range call.Args[1:] {
@@ -104,21 +126,18 @@ func Parse(line string) (Command, error) {
 			return Command{}, errors.New("run supported applications directly, without pipes or redirection")
 		}
 		name, ok := literal(call.Args[0])
-		if !ok || filepath.Base(name) != programName {
+		if !ok || name != programName {
 			return Command{}, errors.New("run supported applications directly, without a shell wrapper")
 		}
-		args := make([]string, 0, len(call.Args)-1)
-		for _, word := range call.Args[1:] {
-			value, ok := literal(word)
-			if !ok {
-				return Command{}, errors.New("application arguments cannot contain shell expansion")
-			}
-			args = append(args, value)
-		}
-		return Command{Program: programName, Args: args}, nil
+		return Command{Program: programName}, nil
 	}
 	if len(parsed.Stmts) == 1 {
 		stmt := parsed.Stmts[0]
+		if call, ok := stmt.Cmd.(*syntax.CallExpr); ok && len(call.Args) > 0 && len(call.Assigns) == 0 && len(stmt.Redirs) == 0 && !stmt.Background && !stmt.Negated {
+			if name, ok := literal(call.Args[0]); ok && name != "exit" && !strings.ContainsAny(name, "/= \t\n") {
+				return Command{Alias: name}, nil
+			}
+		}
 		if call, ok := stmt.Cmd.(*syntax.CallExpr); ok && len(call.Args) == 1 && len(call.Assigns) == 0 && len(stmt.Redirs) == 0 && !stmt.Background {
 			name, ok := literal(call.Args[0])
 			if ok && name == "exit" {
@@ -127,4 +146,31 @@ func Parse(line string) (Command, error) {
 		}
 	}
 	return Command{}, nil
+}
+
+// AliasCommand identifies an alias whose expansion directly launches an interactive program.
+func AliasCommand(output, name string) Command {
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimPrefix(line, "alias ")
+		if !strings.HasPrefix(line, name+"=") {
+			continue
+		}
+		parsed, err := syntax.NewParser().Parse(strings.NewReader(line), "")
+		if err != nil || len(parsed.Stmts) != 1 {
+			continue
+		}
+		call, ok := parsed.Stmts[0].Cmd.(*syntax.CallExpr)
+		if !ok || len(call.Assigns) != 1 || len(call.Args) != 0 || call.Assigns[0].Value == nil {
+			continue
+		}
+		value, ok := literal(call.Assigns[0].Value)
+		if !ok {
+			continue
+		}
+		command, err := Parse(value)
+		if err == nil {
+			return command
+		}
+	}
+	return Command{}
 }

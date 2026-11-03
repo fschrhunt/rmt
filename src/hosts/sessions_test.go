@@ -2,6 +2,7 @@ package hosts
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -88,6 +89,36 @@ func TestShellReconnectPreservesStateAndRunningCommand(t *testing.T) {
 	}
 }
 
+// TestResumeDistinguishesBusyFromExpired lets clients preserve a live shell on reconnect.
+func TestResumeDistinguishesBusyFromExpired(t *testing.T) {
+	manager := shellHandler(t.TempDir(), "")
+	defer manager.Close()
+	server := httptest.NewServer(manager)
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.Dial(ctx, endpoint, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.CloseNow()
+	var ready shell.Event
+	if err := wsjson.Read(ctx, conn, &ready); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		token string
+		want  int
+	}{{ready.Session, http.StatusConflict}, {"missing", http.StatusGone}} {
+		_, response, err := websocket.Dial(ctx, endpoint+"?session="+tc.token, nil)
+		if err == nil || response == nil || response.StatusCode != tc.want {
+			t.Fatalf("resume: response %v, error %v; want %d", response, err, tc.want)
+		}
+		response.Body.Close()
+	}
+}
+
 // TestShellSessionIsBoundToDevice prevents a paired device from attaching another device's shell.
 func TestShellSessionIsBoundToDevice(t *testing.T) {
 	manager := shellHandler(t.TempDir(), "")
@@ -105,7 +136,7 @@ func TestShellSessionIsBoundToDevice(t *testing.T) {
 	}
 }
 
-// TestDisconnectedShellExpires stops abandoned processes after the reconnect grace period.
+// TestDisconnectedShellExpires closes an idle shell after the reconnect grace period.
 func TestDisconnectedShellExpires(t *testing.T) {
 	manager := shellHandler(t.TempDir(), "")
 	manager.grace = 50 * time.Millisecond

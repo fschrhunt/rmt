@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,10 +29,13 @@ type commandShell struct {
 	closeOnce sync.Once
 }
 
-// newCommandShell starts a host shell without a terminal or interactive stdin.
+// newCommandShell starts the user's shell without a terminal or interactive stdin.
 func newCommandShell(home, shellPath string) (*commandShell, error) {
 	if shellPath == "" {
-		shellPath = "/bin/sh"
+		shellPath = os.Getenv("SHELL")
+		if !filepath.IsAbs(shellPath) {
+			shellPath = "/bin/sh"
+		}
 	}
 	cmd := exec.Command(shellPath)
 	cmd.Dir = home
@@ -64,8 +68,20 @@ func newCommandShell(home, shellPath string) (*commandShell, error) {
 	}
 	sh := &commandShell{cmd: cmd, input: input, output: output, marker: append([]byte{0x1e}, []byte(hex.EncodeToString(secret))...), done: make(chan struct{})}
 	go func() { _ = cmd.Wait(); close(sh.done) }()
+	// Load the normal interactive configuration without making stdin interactive.
+	// Interactive shells print prompts. Startup files read EOF instead of the control stream.
+	startup := ""
+	switch filepath.Base(shellPath) {
+	case "zsh":
+		startup = `[[ -r "${ZDOTDIR:-$HOME}/.zshrc" ]] && source "${ZDOTDIR:-$HOME}/.zshrc" </dev/null` + "\n"
+	case "bash":
+		startup = `shopt -s expand_aliases; [ ! -r "$HOME/.bashrc" ] || . "$HOME/.bashrc" </dev/null` + "\n"
+	}
+	if startup != "" {
+		startup += "builtin cd -- " + quoteShell(home) + "\n"
+	}
 	// The shell survives cancellation while foreground children receive SIGTERM.
-	if _, err := io.WriteString(sh.input, "trap ':' INT TERM\n"); err != nil {
+	if _, err := io.WriteString(sh.input, startup+"trap ':' INT TERM\n"); err != nil {
 		sh.Close()
 		return nil, err
 	}

@@ -27,7 +27,7 @@ Settings live in `~/.config/rmt/config.toml`, or `$XDG_CONFIG_HOME/rmt/config.to
 serve = true
 listen = "0.0.0.0:47473"
 programs = ["opencode", "codex"]
-shell = "/bin/sh"
+shell = "/bin/zsh"
 
 [hosts]
 mini = "https://mini.example:47473"
@@ -37,8 +37,10 @@ server = "https://192.168.1.10:47473"
 `serve` controls automatic local host-service installation and defaults to true. Set it to false
 before first use on a client-only machine; it does not stop a service that is already running.
 `listen` controls the host service's HTTPS listener and defaults to `0.0.0.0:47473`. Bind to a
-specific network interface if desired. `programs` selects host backends; both are enabled by default.
-`shell` is an absolute path to a POSIX-compatible shell, defaulting to `/bin/sh`. `hosts` maps
+specific network interface if desired. `programs` selects programs; both are enabled by default.
+`shell` is an absolute path to a shell, defaulting to the host service's `$SHELL`, or `/bin/sh`
+when that is unset. For zsh and bash, rmt loads `.zshrc` or `.bashrc` for ordinary host commands;
+startup files receive no interactive input and may skip settings that require a terminal. `hosts` maps
 local names to reachable HTTPS addresses. Without an entry, `rmt mini` connects to
 `https://mini:47473`, using normal DNS or your network's name resolution. Use LAN, VPN, Tailscale,
 or any other network that provides a reachable address; rmt does not configure networking or NAT.
@@ -72,7 +74,7 @@ private `hosts.json` file; this alone does not revoke its host access.
 ## Terminal behavior
 
 Input editing and history happen locally; Tab completes remote paths. Command output comes from the host. Ordinary commands run in a
-persistent non-interactive POSIX shell, not a remote terminal: programs cannot read interactive
+persistent non-interactive shell, not a remote terminal: programs cannot read interactive
 stdin, and full-screen applications are not supported. Known programs such as `vim` and `tmux` are
 reported as unsupported, but rmt cannot identify every interactive program. Ctrl-C asks the host
 to terminate the current command. If a connection drops during a command, its outcome may be
@@ -81,8 +83,12 @@ same shell. The host retains its shell state and up to 1 MiB of output for 15 se
 any lost output. A shell command already running when the connection closes is allowed to finish.
 After the grace period, an idle shell is cleaned up. If the rmt host restarts or the session
 expires, rmt starts a new shell and tries to restore the last known directory. Supported native applications are `opencode` and `codex`, launched
-as standalone commands from the current remote directory. Program flags are passed to the native CLI;
-shell expansions, pipes, and wrappers around these application launches are not supported.
+as standalone commands. Their arguments are expanded on the host, and direct aliases such as `oc`
+are recognized. For `opencode -w` and `codex -w`, the host needs a `worktree` helper that supports
+`worktree --prepare PROGRAM ...` and writes the chosen directory followed by remaining arguments
+as NUL-terminated fields. rmt uses that directory to launch the native client locally; it does not
+run arbitrary shell wrappers around these programs. Without `-w`, no helper is needed. Pipes and
+compound commands around a native launch are not supported.
 The host and client must use the same rmt protocol version. rmt checks that installed programs
 support the capabilities needed for their role. On the host, OpenCode uses its native managed
 service and Codex uses its native managed app-server daemon; rmt does not stop either on detach.
@@ -90,5 +96,8 @@ OpenCode must support its v2 managed-service commands. If its shared service is 
 rmt reports that setting instead of changing it. Its service address must use localhost or an IP
 address belonging to the host. Native interfaces handle their own network interruptions and task
 state; rmt does not replay or cancel their work.
+If the prompt connection drops while a native client has an active proxied request, rmt keeps the
+attachment available until that request ends. An idle attachment expires after the reconnect grace
+period; reconnecting the native interface after a longer interruption may require relaunching it.
 
 Run `rmt help` for the short usage. See [CONTRIBUTING.md](CONTRIBUTING.md) for development.

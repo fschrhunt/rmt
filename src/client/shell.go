@@ -20,6 +20,9 @@ import (
 // ConnectionError means the command may have reached the host before the connection failed.
 type ConnectionError struct{ Err error }
 
+// ErrSessionExpired means a previous shell no longer exists on the host.
+var ErrSessionExpired = errors.New("shell session expired or unavailable")
+
 func (e *ConnectionError) Error() string {
 	return fmt.Sprintf("connection lost; command outcome may be unknown: %v", e.Err)
 }
@@ -73,6 +76,9 @@ func openShell(host, session string, after uint64) (*Shell, error) {
 	conn, resp, err := websocket.Dial(ctx, endpoint.String(), &websocket.DialOptions{HTTPClient: &wsClient})
 	if err != nil {
 		target.client.CloseIdleConnections()
+		if session != "" && resp != nil && resp.StatusCode == http.StatusGone {
+			return nil, ErrSessionExpired
+		}
 		if resp != nil && resp.StatusCode == http.StatusNotFound {
 			return nil, errors.New("host does not support the new prompt; update its rmt service")
 		}
@@ -138,6 +144,15 @@ func (s *Shell) recover(host string, output io.Writer) error {
 
 // Directory returns the host's current directory for native program launches.
 func (s *Shell) Directory() string { return s.directory }
+
+// Interrupt asks the host to stop its current shell command or launch preparation.
+func (s *Shell) Interrupt() {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	s.write.Lock()
+	defer s.write.Unlock()
+	_ = wsjson.Write(ctx, s.conn, shell.Request{Type: "interrupt"})
+}
 
 // Run streams one command's output and forwards Ctrl-C without replaying commands.
 func (s *Shell) Run(command string, output io.Writer) (int, error) {
@@ -209,7 +224,7 @@ func (s *Shell) Run(command string, output io.Writer) (int, error) {
 	}
 }
 
-// Close terminates this prompt and its native program backend.
+// Close disconnects this prompt without stopping native program services.
 func (s *Shell) Close() {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	s.write.Lock()

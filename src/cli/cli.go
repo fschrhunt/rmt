@@ -3,6 +3,7 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -121,6 +122,9 @@ func reconnect(name string, old *client.Shell, output io.Writer) (*client.Shell,
 		if err == nil {
 			fmt.Fprintln(output, "[rmt reconnected]")
 			return next, nil
+		}
+		if !errors.Is(err, client.ErrSessionExpired) {
+			continue
 		}
 		next, err = client.OpenShell(name)
 		if err != nil {
@@ -265,10 +269,32 @@ func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Wr
 			fmt.Fprintf(output, "rmt: %s is not supported. Supported applications: opencode, codex.\n", cmd.Unsupported)
 			continue
 		}
+		if cmd.Alias != "" {
+			var aliases bytes.Buffer
+			quoted := "'" + strings.ReplaceAll(cmd.Alias, "'", "'\\''") + "'"
+			lookup := "( __rmt_status=$?; builtin alias -- " + quoted + " 2>/dev/null; exit \"$__rmt_status\" )"
+			if _, err = remote.Run(lookup, &aliases); err != nil {
+				fmt.Fprintln(output, "rmt:", err)
+				next, e := reconnect(name, remote, output)
+				if e != nil {
+					return e
+				}
+				remoteMu.Lock()
+				remote = next
+				remoteMu.Unlock()
+				continue
+			}
+			resolved := shell.AliasCommand(aliases.String(), cmd.Alias)
+			cmd.Program, cmd.Unsupported = resolved.Program, resolved.Unsupported
+			if cmd.Unsupported != "" {
+				fmt.Fprintf(output, "rmt: %s is not supported. Supported applications: opencode, codex.\n", cmd.Unsupported)
+				continue
+			}
+		}
 		if cmd.Program != "" {
 			signals := make(chan os.Signal, 1)
 			signal.Notify(signals, os.Interrupt)
-			err = client.Launch(ctx, name, cmd.Program, cmd.Args, remote)
+			err = client.Launch(ctx, name, cmd.Program, line, remote)
 			signal.Stop(signals)
 		} else {
 			_, err = remote.Run(line, output)

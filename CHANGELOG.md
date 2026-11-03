@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Start ordinary commands in the host's configured shell and load zsh or bash startup settings;
+  prevent startup files from consuming the command stream and report unsupported interactive
+  programs instead of attempting them without a terminal.
+- Let supported native launches use host aliases and argument expansion, and use a host worktree
+  helper's explicit preparation mode before starting OpenCode or Codex locally.
+- Preserve an existing shell when reconnection encounters a busy or temporarily unavailable host.
+- Keep an active native client proxy available if its prompt connection drops, and allow Ctrl-C
+  to interrupt worktree preparation.
+
 - Attach to the native OpenCode service and Codex managed app-server without stopping them when
   a terminal disconnects. Let remote shell commands already in progress finish on disconnect.
 

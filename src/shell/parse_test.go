@@ -1,30 +1,44 @@
 package shell
 
-import (
-	"reflect"
-	"testing"
-)
+import "testing"
 
 // TestParseRoutesProgramsWithoutChangingOrdinaryHostCommands protects the local/native boundary.
 func TestParseRoutesProgramsWithoutChangingOrdinaryHostCommands(t *testing.T) {
 	cases := []struct {
 		line, program, unsupported string
-		args                       []string
 		bad, exit                  bool
 	}{
-		{line: `opencode --model 'hello world'`, program: "opencode", args: []string{"--model", "hello world"}},
-		{line: `codex resume`, program: "codex", args: []string{"resume"}},
+		{line: `opencode --model 'hello world'`, program: "opencode"},
+		{line: `codex resume`, program: "codex"},
 		{line: `vim file`, unsupported: "vim"}, {line: `sudo /usr/bin/nvim file`, unsupported: "nvim"},
+		{line: `claude -w`, unsupported: "claude"}, {line: `pi -w`, unsupported: "pi"},
 		{line: `ls -la | head`}, {line: `cd /tmp && pwd`}, {line: `printf '%s' "$HOME"`},
-		{line: `opencode | cat`, bad: true}, {line: `opencode "$HOME"`, bad: true}, {line: `FOO=bar opencode`, bad: true},
+		{line: `command -v codex`}, {line: `command -V opencode`},
+		{line: `print -l -- *(.N)`},
+		{line: `opencode | cat`, bad: true}, {line: `opencode "$HOME"`, program: "opencode"}, {line: `FOO=bar opencode`, bad: true}, {line: `/usr/bin/opencode`, bad: true},
 		{line: `exit`, exit: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.line, func(t *testing.T) {
 			got, err := Parse(tc.line)
-			if (err != nil) != tc.bad || got.Program != tc.program || got.Unsupported != tc.unsupported || got.Exit != tc.exit || !reflect.DeepEqual(got.Args, tc.args) {
+			if (err != nil) != tc.bad || got.Program != tc.program || got.Unsupported != tc.unsupported || got.Exit != tc.exit {
 				t.Fatalf("got %+v, %v", got, err)
 			}
 		})
+	}
+}
+
+// TestAliasCommand detects interactive programs through a host shell alias.
+func TestAliasCommand(t *testing.T) {
+	for _, output := range []string{"oc=opencode\n", "alias oc='opencode --model example'\n"} {
+		if got := AliasCommand(output, "oc"); got.Program != "opencode" {
+			t.Fatalf("%q: got %+v", output, got)
+		}
+	}
+	if got := AliasCommand("oc='echo opencode'\n", "oc"); got.Program != "" {
+		t.Fatalf("ordinary alias detected as a program: %+v", got)
+	}
+	if got := AliasCommand("cl=claude\n", "cl"); got.Unsupported != "claude" {
+		t.Fatalf("unsupported program alias: %+v", got)
 	}
 }
