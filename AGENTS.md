@@ -17,6 +17,9 @@ configuration or abstractions beyond what a change needs.
 ## Where things live
 
 - `main.go`: command entry point.
+- `install.sh`: checksum-verified release installer.
+- `scripts/`: release preparation, archive packaging, and formula helpers.
+- `tests/`: offline tests for repository scripts.
 - `src/cli/`: command dispatch, local prompt, and pairing.
 - `src/client/`: host connections and native application launches.
 - `src/hosts/`: host lifecycle and program supervision.
@@ -26,8 +29,9 @@ configuration or abstractions beyond what a change needs.
 - `src/extensions/`: extension loading, runtime, and program definitions.
 - `src/network/`: paired HTTPS and private device credentials.
 - `src/services/`: automatic user service installation.
-- `*_test.go`: offline behavior tests next to the code they cover.
+- `*_test.go`: offline behavior tests; Go package tests live next to their code.
 - `README.md`: installation, usage, security boundaries and operational limitations.
+- `docs/examples/`: extension examples.
 
 ## Conventions
 

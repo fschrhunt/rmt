@@ -1,4 +1,4 @@
--- Example: add a native application flag without affecting other programs.
+-- Example: copy launch arguments before customizing a program.
 rmt.on("prepare", function(ctx)
   if ctx.program ~= "codex" then return nil end
   local args = {}

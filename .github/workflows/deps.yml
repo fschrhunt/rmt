@@ -1,0 +1,175 @@
+name: Dependency updates
+
+on:
+  schedule:
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: dependency-updates
+  cancel-in-progress: false
+
+jobs:
+  check:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.patch.outputs.changed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install ShellCheck if needed
+        run: |
+          if ! command -v shellcheck >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y shellcheck
+          fi
+      - run: go get -u=patch ./... && go mod tidy
+      - run: ./x check
+      - name: Save the checked changes
+        id: patch
+        run: |
+          if git diff --quiet -- go.mod go.sum; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+          else
+            git diff --binary -- go.mod go.sum > "$RUNNER_TEMP/dependencies.patch"
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.patch.outputs.changed == 'true'
+        with:
+          name: dependencies
+          path: ${{ runner.temp }}/dependencies.patch
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: check
+    if: needs.check.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dependencies
+          path: ${{ runner.temp }}
+      - name: Open or update the dependency pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          branch=chore/dependency-updates
+          ref="refs/heads/$branch"
+          gh auth setup-git
+          prs=$(gh pr list --state open --base main --head "$branch" --json number,author)
+          count=$(jq 'length' <<< "$prs")
+          number=$(jq -r '[.[] | select(.author.login == "github-actions[bot]" or .author.login == "app/github-actions")][0].number // empty' <<< "$prs")
+          remote=$(git ls-remote origin "$ref" | awk 'NR == 1 {print $1}')
+          if { [ "$count" -gt 1 ] || { [ "$count" -gt 0 ] && [ -z "$number" ]; }; } || { [ "$count" -eq 0 ] && [ -n "$remote" ]; }; then
+            echo 'Dependency branch belongs to another change; refusing to overwrite it.' >&2
+            exit 1
+          fi
+          draft=false
+          if [ -n "$number" ]; then
+            [ -n "$remote" ] || { echo 'Dependency PR branch is missing.' >&2; exit 1; }
+            head=$(gh pr view "$number" --json headRefOid --jq .headRefOid)
+            [ "$head" = "$remote" ] || { echo 'Dependency branch changed; retry.' >&2; exit 1; }
+            draft=$(gh pr view "$number" --json isDraft --jq .isDraft)
+            gh pr view "$number" --json files | jq -e 'all(.files[]; .path == "go.mod" or .path == "go.sum")' >/dev/null || {
+              echo 'Dependency PR has other changes; refusing to overwrite it.' >&2
+              exit 1
+            }
+            gh pr view "$number" --json commits | jq -e '(.commits | length) == 1 and .commits[0].messageHeadline == "chore: update dependencies"' >/dev/null || {
+              echo 'Dependency PR has other commits; refusing to overwrite it.' >&2
+              exit 1
+            }
+          fi
+          git apply --cached --binary "$RUNNER_TEMP/dependencies.patch"
+          mapfile -d '' -t files < <(git diff --cached --name-only -z)
+          [ "${#files[@]}" -gt 0 ] || { echo 'Empty patch.' >&2; exit 1; }
+          for file in "${files[@]}"; do
+            case "$file" in go.mod|go.sum) ;; *) echo "Unexpected path: $file" >&2; exit 1 ;; esac
+          done
+          [ -z "$(git diff --cached --summary)" ] || { echo 'Unexpected file mode change.' >&2; exit 1; }
+          git diff --cached --check
+          sha=''
+          if [ -n "$remote" ]; then
+            git fetch origin "$ref"
+            [ "$(git rev-parse FETCH_HEAD)" = "$remote" ] || { echo 'Dependency branch changed; retry.' >&2; exit 1; }
+            if [ "$(git write-tree)" = "$(git rev-parse 'FETCH_HEAD^{tree}')" ]; then
+              if [ "$draft" = false ]; then
+                previous=$(gh run list --workflow ci.yml --branch "$branch" --commit "$remote" \
+                  --event workflow_dispatch --json status,conclusion --jq '.[0] | "\(.status) \(.conclusion)"')
+                if [ "$previous" = 'completed success' ]; then
+                  echo 'Dependency PR is already up to date and CI passed.'
+                  exit 0
+                fi
+              fi
+              sha=$remote
+            fi
+          fi
+          if [ -z "$sha" ]; then
+            if [ -n "$number" ] && [ "$draft" = false ]; then
+              if ! gh pr ready "$number" --undo; then
+                echo 'Could not convert the PR to draft; required checks still apply.'
+              fi
+            fi
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git -c core.hooksPath=/dev/null commit -m 'chore: update dependencies'
+            if [ -n "$remote" ]; then
+              git push --force-with-lease="$ref:$remote" origin "HEAD:$ref"
+            else
+              git push --force-with-lease="$ref:" origin "HEAD:$ref"
+            fi
+            sha=$(git rev-parse HEAD)
+          fi
+          if [ -z "$number" ]; then
+            if ! gh pr create --draft --base main --head "$branch" --title 'chore: update dependencies' \
+              --body 'Weekly compatible Go dependency updates. CI is running.'; then
+              gh pr create --base main --head "$branch" --title 'chore: update dependencies' \
+                --body 'Weekly compatible Go dependency updates. CI is running.'
+            fi
+            number=$(gh pr view "$branch" --json number --jq .number)
+          fi
+          # Pushes made by GITHUB_TOKEN do not trigger CI, so dispatch it explicitly.
+          gh workflow run ci.yml --ref "$branch"
+          run_id=''
+          for _ in $(seq 1 30); do
+            run_id=$(gh run list --workflow ci.yml --branch "$branch" --limit 20 \
+              --json databaseId,headSha,event \
+              --jq ".[] | select(.headSha == \"$sha\" and .event == \"workflow_dispatch\") | .databaseId" | head -n 1)
+            [ -n "$run_id" ] && break
+            sleep 2
+          done
+          [ -n "$run_id" ] || { echo 'Could not find CI for the update commit.' >&2; exit 1; }
+          gh run watch "$run_id" --exit-status
+          [ "$(gh pr view "$number" --json headRefOid --jq .headRefOid)" = "$sha" ] || {
+            echo 'Dependency PR changed during CI; refusing to mark it ready.' >&2
+            exit 1
+          }
+          body="$RUNNER_TEMP/dependency-pr.md"
+          printf 'Weekly compatible Go dependency updates. The update job and CI passed for commit %s.\n' "$sha" > "$body"
+          gh pr edit "$number" --body-file "$body"
+          if [ "$(gh pr view "$number" --json isDraft --jq .isDraft)" = true ]; then
+            gh pr ready "$number"
+          fi

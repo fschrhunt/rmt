@@ -28,7 +28,8 @@ case "$command" in
     fmt) [ "$#" -eq 0 ] || { [ "$#" -eq 1 ] && [ "$1" = --check ]; } || invalid ;;
 esac
 case "$command" in
-    check) ./x fmt --check; ./x lint; ./x test; ./x shell ;;
+    # Shell scripts run by tests are not Go source; force tests to notice script changes.
+    check) ./x fmt --check; ./x lint; ./x test -count=1 ./...; ./x shell ;;
     fmt)
         if [ "${1:-}" = --check ]; then
             unformatted=$(gofmt -l .)
@@ -44,7 +45,7 @@ case "$command" in
     test) if [ "$#" -eq 0 ]; then set -- ./...; fi; go test "$@" ;;
     shell)
         command -v shellcheck >/dev/null 2>&1 || { printf 'shellcheck is not on PATH\n' >&2; exit 2; }
-        shellcheck x .githooks/pre-commit
+        shellcheck x install.sh .githooks/pre-commit scripts/*.sh
         ;;
     build) mkdir -p dist; go build -o dist/rmt . ;;
     dev) exec go run . "$@" ;;

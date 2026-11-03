@@ -1,0 +1,192 @@
+name: Release
+
+# A reviewed release can be dispatched from main or started by a maintainer-pushed tag.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Stable version, such as v1.2.3
+        required: true
+        type: string
+      commit:
+        description: Full SHA of the checked main commit
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate the checked commit and create its tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          COMMIT: ${{ inputs.commit }}
+        run: |
+          set -euo pipefail
+          [ "$GITHUB_REF" = refs/heads/main ] || { echo 'Dispatch releases from main.' >&2; exit 1; }
+          [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || { echo 'Invalid stable tag.' >&2; exit 1; }
+          [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo 'Invalid commit SHA.' >&2; exit 1; }
+          if [ "$COMMIT" != "$GITHUB_SHA" ] || [ "$COMMIT" != "$(git rev-parse HEAD)" ]; then
+            echo 'Main changed after the release was requested; check CI and retry.' >&2
+            exit 1
+          fi
+          awk -v tag="$TAG" '
+            /^## / { section = ($2 == tag); if (section) count++; next }
+            section && /[^[:space:]]/ { body = 1 }
+            END { exit !(count == 1 && body) }
+          ' CHANGELOG.md || { echo 'Missing or empty changelog section.' >&2; exit 1; }
+          result=$(gh run list --workflow ci.yml --branch main --event push --commit "$COMMIT" \
+            --json status,conclusion --jq '.[0] | "\(.status) \(.conclusion)"')
+          [ "$result" = 'completed success' ] || { echo 'CI has not passed for this main commit.' >&2; exit 1; }
+          [ -n "$RELEASE_TOKEN" ] || { echo 'Set RELEASE_TOKEN in repository Actions secrets.' >&2; exit 1; }
+          git show-ref --verify --quiet "refs/tags/$TAG" && { echo 'Release tag already exists.' >&2; exit 1; }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a "$TAG" -m "$TAG" "$COMMIT"
+          GH_TOKEN="$RELEASE_TOKEN" git -c credential.helper= -c 'credential.helper=!gh auth git-credential' \
+            push origin "refs/tags/$TAG"
+
+  check:
+    if: github.event_name == 'push'
+    permissions:
+      actions: read
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Validate tag and changelog
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
+            echo "Expected a stable semantic version tag vX.Y.Z without leading zeros: $TAG" >&2
+            exit 1
+          }
+          git merge-base --is-ancestor HEAD origin/main || {
+            echo "$TAG is not on main" >&2
+            exit 1
+          }
+          awk -v tag="$TAG" '
+            /^## / { section = ($2 == tag); if (section) count++; next }
+            section && /[^[:space:]]/ { body = 1 }
+            END { exit !(count == 1 && body) }
+          ' CHANGELOG.md || {
+            echo "CHANGELOG.md must have exactly one nonempty ## $TAG section" >&2
+            exit 1
+          }
+      - name: Check main CI for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          commit=$(git rev-parse HEAD)
+          result=$(gh run list --workflow ci.yml --branch main --event push --commit "$commit" \
+            --json status,conclusion --jq '.[0] | "\(.status) \(.conclusion)"')
+          [ "$result" = 'completed success' ] || {
+            echo "Main CI for $commit is '$result'; it must pass before release." >&2
+            exit 1
+          }
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install ShellCheck if needed
+        run: |
+          if ! command -v shellcheck >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y shellcheck
+          fi
+      - run: ./x check
+
+  release:
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Build and verify archives and checksums
+        env:
+          TAG: ${{ github.ref_name }}
+        run: scripts/package.sh "$TAG" dist
+      - name: Publish release with changelog notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          awk -v tag="$TAG" '/^## / { section = ($2 == tag); next } section' CHANGELOG.md > "$RUNNER_TEMP/release-notes.md"
+          test -s "$RUNNER_TEMP/release-notes.md"
+          gh release create "$TAG" dist/*.tar.gz dist/checksums.txt \
+            --verify-tag --title "$TAG" --notes-file "$RUNNER_TEMP/release-notes.md"
+
+  formula:
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    concurrency:
+      group: homebrew-formula
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Propose the Homebrew formula
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          [ -n "$GH_TOKEN" ] || { echo 'Set RELEASE_TOKEN in repository Actions secrets.' >&2; exit 1; }
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
+          [ "$TAG" = "$latest" ] || { echo 'A newer release exists; skipping the formula.'; exit 0; }
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern checksums.txt --output "$RUNNER_TEMP/checksums.txt"
+          scripts/formula.sh "$TAG" "$RUNNER_TEMP/checksums.txt" > rmt.rb
+          git add -- rmt.rb
+          git diff --cached --quiet && exit 0
+          branch="release/formula-$TAG"
+          ref="refs/heads/$branch"
+          gh auth setup-git
+          remote=$(git ls-remote --heads origin "$ref")
+          [ -z "$remote" ] || { echo "Branch $branch already exists; inspect it before retrying." >&2; exit 1; }
+          git switch -c "$branch"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git -c core.hooksPath=/dev/null commit -m "release: update Homebrew formula for $TAG"
+          git push --force-with-lease="$ref:" origin "HEAD:$ref"
+          gh pr create --base main --head "$branch" \
+            --title "release: update Homebrew formula for $TAG" \
+            --body "Update the Homebrew formula using the published release checksums. Review and merge after CI passes."

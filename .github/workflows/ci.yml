@@ -16,6 +16,7 @@ concurrency:
 jobs:
   check:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
@@ -32,6 +33,23 @@ jobs:
           if ! command -v shellcheck >/dev/null; then
             if [ "$RUNNER_OS" = macOS ]; then brew install shellcheck; else sudo apt-get update && sudo apt-get install -y shellcheck; fi
           fi
+      - name: Check workflow syntax
+        if: runner.os == 'Linux'
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          "$(go env GOPATH)/bin/actionlint" .github/workflows/*.yml
+      - name: Check Homebrew formula syntax
+        if: runner.os == 'macOS'
+        run: |
+          for target in darwin_arm64 darwin_amd64 linux_arm64 linux_amd64; do
+            printf '%064d  rmt_v0.0.0_%s.tar.gz\n' 0 "$target"
+          done > "$RUNNER_TEMP/checksums.txt"
+          scripts/formula.sh v0.0.0 "$RUNNER_TEMP/checksums.txt" > "$RUNNER_TEMP/rmt.rb"
+          ruby -c "$RUNNER_TEMP/rmt.rb"
+          if [ -f rmt.rb ]; then ruby -c rmt.rb; fi
       - run: ./x check
       - run: go test -race ./...
       - run: ./x build
+      - name: Verify release archives
+        if: runner.os == 'Linux'
+        run: scripts/package.sh v0.0.0 "$RUNNER_TEMP/rmt-release"
