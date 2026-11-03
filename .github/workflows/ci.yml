@@ -27,7 +27,8 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
+          go-version: '1.27.x'
+          check-latest: true
       - name: Install ShellCheck if needed
         run: |
           if ! command -v shellcheck >/dev/null; then
@@ -48,6 +49,9 @@ jobs:
           ruby -c "$RUNNER_TEMP/rmt.rb"
           if [ -f rmt.rb ]; then ruby -c rmt.rb; fi
       - run: ./x check
+      - name: Audit reachable vulnerabilities
+        if: runner.os == 'Linux'
+        run: ./x audit
       - run: go test -race ./...
       - run: ./x build
       - name: Verify release archives

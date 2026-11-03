@@ -10,6 +10,7 @@ usage: ./x [command] [args...]
   check           Default; check formatting, vet, tests, and shell scripts
   fmt [--check]   Format Go files, or check formatting without changes
   lint            Run go vet
+  audit           Check reachable Go vulnerabilities (requires network)
   test [args...]  Run go test (default: ./...)
   shell           Run ShellCheck on repository shell scripts
   build           Build dist/rmt without replacing the installed binary
@@ -24,7 +25,7 @@ invalid() { usage >&2; exit 2; }
 command=${1-check}
 if [ "$#" -gt 0 ]; then shift; fi
 case "$command" in
-    check|lint|shell|build|hooks|help|--help|-h) [ "$#" -eq 0 ] || invalid ;;
+    check|lint|audit|shell|build|hooks|help|--help|-h) [ "$#" -eq 0 ] || invalid ;;
     fmt) [ "$#" -eq 0 ] || { [ "$#" -eq 1 ] && [ "$1" = --check ]; } || invalid ;;
 esac
 case "$command" in
@@ -42,6 +43,7 @@ case "$command" in
         fi
         ;;
     lint) go vet ./... ;;
+    audit) go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./... ;;
     test) if [ "$#" -eq 0 ]; then set -- ./...; fi; go test "$@" ;;
     shell)
         command -v shellcheck >/dev/null 2>&1 || { printf 'shellcheck is not on PATH\n' >&2; exit 2; }

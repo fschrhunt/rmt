@@ -20,6 +20,8 @@ sessions. The rmt host service stays available for other devices.
 
 ## Installation
 
+rmt supports macOS 13 or newer and Linux.
+
 Build rmt with `./x build` and put `dist/rmt` in a permanent directory on your `PATH`. Once a
 release and its Homebrew formula are published, these installation routes are available when
 the repository is public:

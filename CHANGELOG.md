@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Require Go 1.27.3 or newer for builds and audit reachable vulnerabilities in CI; macOS builds
+  require macOS 13 or newer.
 - Add a release preparation helper and check workflow syntax and release archives in CI.
 - Prepare a checksum-verified installer and Homebrew formula updates for release distribution.
 - Move extension examples under `docs/examples/`.

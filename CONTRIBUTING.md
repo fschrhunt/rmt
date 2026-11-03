@@ -1,7 +1,7 @@
 # Contributing
 
 rmt is a small Go program. Keep the native program interfaces intact and favor simple changes.
-Go 1.24 or newer, Git, a POSIX shell, and ShellCheck are needed for development. The checks do not
+Go 1.27.3 or newer, Git, a POSIX shell, and ShellCheck are needed for development. The checks do not
 require a Tailscale connection, real programs, or model credentials.
 
 ```sh
@@ -10,7 +10,8 @@ require a Tailscale connection, real programs, or model credentials.
 ./x build  # writes dist/rmt without replacing the installed binary
 ```
 
-`./x` defaults to `check`. Run `./x help` for the other commands. Use `./x dev` to run this
+`./x` defaults to `check`. Run `./x audit` for the network-backed vulnerability scan, or
+`./x help` for the other commands. Use `./x dev` to run this
 checkout. Rebuilding does not restart an installed host service.
 
 `main.go` starts the CLI; implementation and tests live in packages under `src/`. See

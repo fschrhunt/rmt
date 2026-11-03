@@ -8,6 +8,7 @@ configuration or abstractions beyond what a change needs.
 
 ```sh
 ./x check                 # formatting, vet, offline tests, and ShellCheck; CI runs the same checks
+./x audit                 # reachable Go vulnerability scan; requires network
 ./x test ./... -run NAME  # a focused Go test
 ./x build                 # build dist/rmt without replacing an installed binary
 ./x dev --help            # run this checkout
@@ -19,7 +20,6 @@ configuration or abstractions beyond what a change needs.
 - `main.go`: command entry point.
 - `install.sh`: checksum-verified release installer.
 - `scripts/`: release preparation, archive packaging, and formula helpers.
-- `tests/`: offline tests for repository scripts.
 - `src/cli/`: command dispatch, local prompt, and pairing.
 - `src/client/`: host connections and native application launches.
 - `src/hosts/`: host lifecycle and program supervision.
@@ -31,6 +31,7 @@ configuration or abstractions beyond what a change needs.
 - `src/services/`: automatic user service installation.
 - `*_test.go`: offline behavior tests; Go package tests live next to their code.
 - `README.md`: installation, usage, security boundaries and operational limitations.
+- `SECURITY.md`: private vulnerability reporting.
 - `docs/examples/`: extension examples.
 
 ## Conventions
