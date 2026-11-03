@@ -8,6 +8,7 @@ configuration or abstractions beyond what a change needs.
 
 ```sh
 ./x check                 # formatting, vet, offline tests, and ShellCheck; CI runs the same checks
+./x audit                 # reachable Go vulnerability scan; requires network
 ./x test ./... -run NAME  # a focused Go test
 ./x build                 # build dist/rmt without replacing an installed binary
 ./x dev --help            # run this checkout
