@@ -16,7 +16,7 @@ configuration or abstractions beyond what a change needs.
 
 ## Where things live
 
-- `src/cmd/rmt/main.go`: command entry point.
+- `main.go`: command entry point.
 - `src/cli/`: command dispatch, local prompt, and pairing.
 - `src/client/`: host connections and native application launches.
 - `src/hosts/`: host lifecycle and program supervision.

@@ -46,8 +46,8 @@ case "$command" in
         command -v shellcheck >/dev/null 2>&1 || { printf 'shellcheck is not on PATH\n' >&2; exit 2; }
         shellcheck x .githooks/pre-commit
         ;;
-    build) mkdir -p dist; go build -o dist/rmt ./src/cmd/rmt ;;
-    dev) exec go run ./src/cmd/rmt "$@" ;;
+    build) mkdir -p dist; go build -o dist/rmt . ;;
+    dev) exec go run . "$@" ;;
     hooks) git config core.hooksPath .githooks; printf 'Git hook installed.\n' ;;
     help|--help|-h) usage ;;
     *) invalid ;;

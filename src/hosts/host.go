@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/fschrhunt/rmt/src/config"
+	"github.com/fschrhunt/rmt/src/extensions"
 	"github.com/fschrhunt/rmt/src/network"
 	"github.com/fschrhunt/rmt/src/programs"
 )
@@ -28,6 +29,14 @@ func Run() error {
 	}
 	if cfg.Listen == "" {
 		cfg.Listen = "0.0.0.0:47473"
+	}
+	root, err := config.Dir()
+	if err != nil {
+		return err
+	}
+	registry, err := extensions.Load(filepath.Join(root, "extensions"))
+	if err != nil {
+		return fmt.Errorf("load extensions: %w", err)
 	}
 	home, e := os.UserHomeDir()
 	if e != nil || home == "" {
@@ -71,19 +80,31 @@ func Run() error {
 			}
 		}
 	}
+	for _, name := range cfg.Programs {
+		if name != "opencode" && name != "codex" && !registry.Has(name) {
+			problems[name] = "program extension is not installed on this host"
+		}
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	available := cfg.Programs
+	if available == nil {
+		available = append([]string{"opencode", "codex"}, registry.Programs()...)
+	}
 	control := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/info" || r.Method != "GET" {
 			http.NotFound(w, r)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(network.Info{Home: home, Programs: cfg.Programs, Problems: problems, Versions: versions})
+		_ = json.NewEncoder(w).Encode(network.Info{Home: home, Programs: available, Problems: problems, Versions: versions})
 	})
 	commands := shellHandler(home, cfg.Shell)
 	commands.authorized = paired.Authorized
-	commands.enabled = cfg.Enabled
+	commands.enabled = func(name string) bool {
+		return (cfg.Programs == nil && (name == "opencode" || name == "codex" || registry.Has(name))) || cfg.Enabled(name)
+	}
+	commands.extensions = registry
 	commands.problems = problems
 	defer commands.Close()
 	failed := make(chan error, 1)

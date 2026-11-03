@@ -16,64 +16,9 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
+	"github.com/fschrhunt/rmt/src/extensions"
 	"github.com/fschrhunt/rmt/src/shell"
 )
-
-// TestPrepareProgramUsesWorktreeHelper selects a remote worktree without starting an agent.
-func TestPrepareProgramUsesWorktreeHelper(t *testing.T) {
-	zsh, err := exec.LookPath("zsh")
-	if err != nil {
-		t.Skip("zsh is not installed")
-	}
-	home, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("ZDOTDIR", home)
-	bin := filepath.Join(home, "bin")
-	if err := os.Mkdir(bin, 0700); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	for _, args := range [][]string{{"init", "-q", home}, {"-C", home, "-c", "user.name=rmt test", "-c", "user.email=rmt@example.test", "commit", "--allow-empty", "-qm", "initial"}} {
-		if output, err := exec.Command("git", args...).CombinedOutput(); err != nil {
-			t.Fatalf("git: %s: %v", output, err)
-		}
-	}
-	rc := "opencode() { worktree opencode \"$@\"; }\ncodex() { worktree codex \"$@\"; }\nalias oc=opencode\n"
-	if err := os.WriteFile(filepath.Join(home, ".zshrc"), []byte(rc), 0600); err != nil {
-		t.Fatal(err)
-	}
-	helper := "#!/bin/sh\nset -e\n[ \"$1\" = --prepare ] || exit 1\nshift\nprogram=$1; shift\n[ \"$1\" = -w ] || exit 1\nshift\nname=$1; shift\ndir=\"$HOME/.$program/worktrees/$name\"\n[ -d \"$dir\" ] || git -C \"$HOME\" worktree add -q -b \"$program/$name\" \"$dir\"\ncd \"$dir\"\nprintf '%s\\0' \"$(pwd -P)\"\n[ \"$#\" -eq 0 ] || printf '%s\\0' \"$@\"\n"
-	if err := os.WriteFile(filepath.Join(bin, "worktree"), []byte(helper), 0700); err != nil {
-		t.Fatal(err)
-	}
-	sh, err := newCommandShell(home, zsh)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer sh.Close()
-	if _, status, err := sh.Run("export RMT_MODEL='hello world'", func([]byte) error { return nil }); err != nil || status != 0 {
-		t.Fatalf("environment: %d %v", status, err)
-	}
-	for _, program := range []string{"opencode", "codex"} {
-		got, err := sh.prepareProgram(program+` -w feature --model "$RMT_MODEL"`, program)
-		if err != nil {
-			t.Fatalf("%s: %v (%s)", program, err, got.Output)
-		}
-		if got.Directory != filepath.Join(home, "."+program, "worktrees", "feature") || !reflect.DeepEqual(got.Args, []string{"--model", "hello world"}) {
-			t.Fatalf("%s: %+v", program, got)
-		}
-	}
-	got, err := sh.prepareProgram(`oc -w feature --model "$RMT_MODEL"`, "opencode")
-	if err != nil || got.Directory != filepath.Join(home, ".opencode", "worktrees", "feature") || !reflect.DeepEqual(got.Args, []string{"--model", "hello world"}) {
-		t.Fatalf("alias: %+v, %v", got, err)
-	}
-	got, err = sh.prepareProgram("opencode", "opencode")
-	if err != nil || got.Directory != home || len(got.Args) != 0 {
-		t.Fatalf("no arguments: %+v, %v", got, err)
-	}
-}
 
 // TestInterruptPreparation stops a worktree helper and leaves the prompt usable.
 func TestInterruptPreparation(t *testing.T) {
@@ -85,7 +30,16 @@ func TestInterruptPreparation(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	extensionDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(extensionDir, "work.lua"), []byte(`rmt.on("prepare", function(c) local _, _, status = c.run({"worktree"}); if status ~= 0 then error("interrupted") end end)`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := extensions.Load(extensionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	manager := shellHandler(home, "/bin/sh")
+	manager.extensions = registry
 	defer manager.Close()
 	mux := http.NewServeMux()
 	mux.Handle("/shell", manager)
@@ -177,41 +131,6 @@ func TestPrepareEndpoint(t *testing.T) {
 	}
 }
 
-// TestPrepareWithoutHelper reports the missing dependency only for worktree launches.
-func TestPrepareWithoutHelper(t *testing.T) {
-	t.Setenv("PATH", t.TempDir())
-	sh, err := newCommandShell(t.TempDir(), "/bin/sh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer sh.Close()
-	if _, err := sh.prepareProgram("codex --help", "codex"); err != nil {
-		t.Fatalf("ordinary launch requires a helper: %v", err)
-	}
-	got, err := sh.prepareProgram("codex -w fox", "codex")
-	if err == nil || !strings.Contains(got.Output, "requires a worktree helper") {
-		t.Fatalf("missing helper: output %q, error %v", got.Output, err)
-	}
-}
-
-// TestPrepareRejectsOversizedLaunch keeps malformed helper output from becoming a launch.
-func TestPrepareRejectsOversizedLaunch(t *testing.T) {
-	bin := t.TempDir()
-	helper := "#!/bin/sh\nprintf '/tmp\\0'\nhead -c 70000 /dev/zero\n"
-	if err := os.WriteFile(filepath.Join(bin, "worktree"), []byte(helper), 0700); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	sh, err := newCommandShell(t.TempDir(), "/bin/sh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer sh.Close()
-	if _, err := sh.prepareProgram("codex -w example", "codex"); err == nil || !strings.Contains(err.Error(), "invalid program launch") {
-		t.Fatalf("expected an invalid launch error, got %v", err)
-	}
-}
-
 // TestPrepareWithProgramAlias handles a shell alias without launching it on the host.
 func TestPrepareWithProgramAlias(t *testing.T) {
 	for _, name := range []string{"bash", "zsh"} {
@@ -241,21 +160,33 @@ func TestPrepareWithProgramAlias(t *testing.T) {
 	}
 }
 
-// TestPrepareWithFunctionHelper supports a worktree helper defined in shell startup files.
-func TestPrepareWithFunctionHelper(t *testing.T) {
+// TestPreparePassesWorktreeArguments leaves application flags unchanged without a hook.
+func TestPreparePassesWorktreeArguments(t *testing.T) {
+	sh, err := newCommandShell(t.TempDir(), "/bin/sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sh.Close()
+	got, err := sh.prepareProgram("codex -w feature", "codex")
+	if err != nil || !reflect.DeepEqual(got.Args, []string{"-w", "feature"}) {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+}
+
+// TestRunExtensionUsesShellFunctions checks that host hooks run in the prompt environment.
+func TestRunExtensionUsesShellFunctions(t *testing.T) {
 	for _, name := range []string{"bash", "zsh"} {
 		t.Run(name, func(t *testing.T) {
 			shellPath, err := exec.LookPath(name)
 			if err != nil {
-				t.Skipf("%s is not installed", name)
+				t.Skip(err)
 			}
 			home, err := filepath.EvalSymlinks(t.TempDir())
 			if err != nil {
 				t.Fatal(err)
 			}
 			t.Setenv("ZDOTDIR", home)
-			rc := "worktree() { printf '%s\\0' \"$HOME\" --model example; }\n"
-			if err := os.WriteFile(filepath.Join(home, "."+name+"rc"), []byte(rc), 0600); err != nil {
+			if err := os.WriteFile(filepath.Join(home, "."+name+"rc"), []byte("helper() { printf '%s' \"$1\"; }\n"), 0600); err != nil {
 				t.Fatal(err)
 			}
 			sh, err := newCommandShell(home, shellPath)
@@ -263,8 +194,34 @@ func TestPrepareWithFunctionHelper(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer sh.Close()
-			got, err := sh.prepareProgram("codex -w example", "codex")
-			if err != nil || got.Directory != home || !reflect.DeepEqual(got.Args, []string{"--model", "example"}) {
+			out, _, status, err := sh.runExtension(home, []string{"helper", "hello world"})
+			if err != nil || status != 0 || out != "hello world" {
+				t.Fatalf("%q %d %v", out, status, err)
+			}
+		})
+	}
+}
+
+// TestPrepareHyphenatedProgram supports extension names on every host shell.
+func TestPrepareHyphenatedProgram(t *testing.T) {
+	for _, shellName := range []string{"sh", "bash", "zsh"} {
+		t.Run(shellName, func(t *testing.T) {
+			path, err := exec.LookPath(shellName)
+			if err != nil {
+				t.Skip(err)
+			}
+			home, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("ZDOTDIR", home)
+			sh, err := newCommandShell(home, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer sh.Close()
+			got, err := sh.prepareProgram("demo-app --flag value", "demo-app")
+			if err != nil || got.Directory != home || !reflect.DeepEqual(got.Args, []string{"--flag", "value"}) {
 				t.Fatalf("got %+v, %v", got, err)
 			}
 		})

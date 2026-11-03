@@ -20,8 +20,7 @@ sessions. The rmt host service stays available for other devices.
 
 ## Configuration
 
-Settings live in `~/.config/rmt/config.toml`, or `$XDG_CONFIG_HOME/rmt/config.toml` when
-`XDG_CONFIG_HOME` is set. Create the file on each machine as needed. All fields are optional:
+Settings live in `~/.rmt/settings.toml`. Create the file on each machine as needed. All fields are optional:
 
 ```toml
 serve = true
@@ -37,7 +36,8 @@ server = "https://192.168.1.10:47473"
 `serve` controls automatic local host-service installation and defaults to true. Set it to false
 before first use on a client-only machine; it does not stop a service that is already running.
 `listen` controls the host service's HTTPS listener and defaults to `0.0.0.0:47473`. Bind to a
-specific network interface if desired. `programs` selects programs; both are enabled by default.
+specific network interface if desired. `programs` selects programs; both built-in programs and
+locally registered extension programs are enabled by default.
 `shell` is an absolute path to a shell, defaulting to the host service's `$SHELL`, or `/bin/sh`
 when that is unset. For zsh and bash, rmt loads `.zshrc` or `.bashrc` for ordinary host commands;
 startup files receive no interactive input and may skip settings that require a terminal. `hosts` maps
@@ -59,7 +59,7 @@ own host-side authentication or configure the service environment separately. If
 rmt reports the error while still allowing client connections.
 
 The first `rmt <host>` connection prompts for pairing. On the host, open the private
-`~/.config/rmt/pairing.json` file (under `$XDG_CONFIG_HOME` if set), compare its `verify` value with
+`~/.rmt/pairing.json` file, compare its `verify` value with
 the one shown locally, and enter its one-time code. Confirm the verification value through a trusted
 channel. The code expires and disappears after successful pairing. Subsequent connections use a
 saved credential and pinned host identity in the client's private config directory.
@@ -70,6 +70,11 @@ to revoke it; the running service reloads the file and closes that device's acti
 Use an editor that saves with an atomic rename. While the file is invalid, new requests are
 denied; if it remains invalid for two seconds, active connections are closed. Keep it owner-only. To forget a host on a client, remove its entry from the
 private `hosts.json` file; this alone does not revoke its host access.
+
+On upgrade, rmt moves the previous `~/.config/rmt` files (or `$XDG_CONFIG_HOME/rmt`) into
+`~/.rmt`, retaining the existing identity and pairing records. Stop the old host service before
+the first run of the new version. If files conflict, rmt reports the conflict without replacing
+them. The old control socket is recreated by the new service.
 
 ## Terminal behavior
 
@@ -84,10 +89,8 @@ any lost output. A shell command already running when the connection closes is a
 After the grace period, an idle shell is cleaned up. If the rmt host restarts or the session
 expires, rmt starts a new shell and tries to restore the last known directory. Supported native applications are `opencode` and `codex`, launched
 as standalone commands. Their arguments are expanded on the host, and direct aliases such as `oc`
-are recognized. For `opencode -w` and `codex -w`, the host needs a `worktree` helper that supports
-`worktree --prepare PROGRAM ...` and writes the chosen directory followed by remaining arguments
-as NUL-terminated fields. rmt uses that directory to launch the native client locally; it does not
-run arbitrary shell wrappers around these programs. Without `-w`, no helper is needed. Pipes and
+are recognized. rmt passes flags through unless an installed extension changes them; it does not
+run arbitrary shell wrappers around these programs. Pipes and
 compound commands around a native launch are not supported.
 The host and client must use the same rmt protocol version. rmt checks that installed programs
 support the capabilities needed for their role. On the host, OpenCode uses its native managed
@@ -99,5 +102,12 @@ state; rmt does not replay or cancel their work.
 If the prompt connection drops while a native client has an active proxied request, rmt keeps the
 attachment available until that request ends. An idle attachment expires after the reconnect grace
 period; reconnecting the native interface after a longer interruption may require relaunching it.
+
+## Extensions
+
+Put trusted Lua files in `~/.rmt/extensions/` to prepare launches or register custom native
+programs. Extensions run on the device where they are installed. See the
+[extension guide](docs/extensions.md) and [examples](examples/extensions/) for the API and
+client/host setup.
 
 Run `rmt help` for the short usage. See [CONTRIBUTING.md](CONTRIBUTING.md) for development.

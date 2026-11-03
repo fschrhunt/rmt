@@ -2,6 +2,7 @@ package hosts
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/fschrhunt/rmt/src/extensions"
 )
 
 // TestSharedProgramRemainsAvailable verifies detaching one window never stops a native service.
@@ -207,6 +210,16 @@ func TestNativeStartupContinuesAfterDisconnect(t *testing.T) {
 	t.Fatal("native startup was killed after disconnect")
 }
 
+// TestHostExtensionCommandStopsOnCancellation releases a failed program start promptly.
+func TestHostExtensionCommandStopsOnCancellation(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, _, _, err := runHostCommand(ctx, t.TempDir(), []string{"sleep", "30"})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected deadline, got %v", err)
+	}
+}
+
 // TestOpenCodeDisabledRespectsNativePreference does not enable an explicitly disabled service.
 func TestOpenCodeDisabledRespectsNativePreference(t *testing.T) {
 	dir := t.TempDir()
@@ -222,5 +235,53 @@ func TestOpenCodeDisabledRespectsNativePreference(t *testing.T) {
 	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatal("disabled service was started")
+	}
+}
+
+// TestExtensionProgramPreparesAndProxies runs a custom integration on the host.
+func TestExtensionProgramPreparesAndProxies(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := filepath.Join(home, "project")
+	if err := os.Mkdir(project, 0700); err != nil {
+		t.Fatal(err)
+	}
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("from-host")) }))
+	defer backend.Close()
+	extensionDir := t.TempDir()
+	code := fmt.Sprintf(`rmt.on("prepare", function(c) if c.program == "demo" then return {directory=%q,args={"prepared"}} end end)
+rmt.program({name="demo",host=function(c) local out,_,status=c.run({"pwd"}); if status ~= 0 or out ~= c.directory.."\n" then error("wrong directory") end; return {url=%q} end})`, project, backend.URL)
+	if err := os.WriteFile(filepath.Join(extensionDir, "demo.lua"), []byte(code), 0600); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := extensions.Load(extensionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := shellHandler(home, "/bin/sh")
+	manager.extensions = registry
+	manager.enabled = func(string) bool { return true }
+	defer manager.Close()
+	session, _, err := manager.acquire("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := "/program/" + session.token + "/demo/"
+	rec := httptest.NewRecorder()
+	manager.serveProgram(rec, httptest.NewRequest(http.MethodPost, base+"prepare", strings.NewReader(`{"command":"demo -w test"}`)))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"prepared"`) {
+		t.Fatalf("prepare: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	manager.serveProgram(rec, httptest.NewRequest(http.MethodPost, base+"start", nil))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("start: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	manager.serveProgram(rec, httptest.NewRequest(http.MethodGet, base+"proxy/test", nil))
+	if rec.Code != http.StatusOK || rec.Body.String() != "from-host" {
+		t.Fatalf("proxy: %d %s", rec.Code, rec.Body.String())
 	}
 }

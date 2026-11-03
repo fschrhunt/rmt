@@ -13,7 +13,7 @@ require a Tailscale connection, real programs, or model credentials.
 `./x` defaults to `check`. Run `./x help` for the other commands. Use `./x dev` to run this
 checkout. Rebuilding does not restart an installed host service.
 
-`src/cmd/rmt/main.go` starts the CLI; implementation and tests live in packages under `src/`. See
+`main.go` starts the CLI; implementation and tests live in packages under `src/`. See
 [AGENTS.md](AGENTS.md) for the package map and development conventions.
 
 Tests should protect meaningful behavior and run offline. Never include credentials, prompts,

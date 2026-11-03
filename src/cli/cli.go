@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/fschrhunt/rmt/src/client"
 	"github.com/fschrhunt/rmt/src/config"
+	"github.com/fschrhunt/rmt/src/extensions"
 	"github.com/fschrhunt/rmt/src/hosts"
 	"github.com/fschrhunt/rmt/src/network"
 	"github.com/fschrhunt/rmt/src/services"
@@ -66,7 +68,7 @@ func Main() {
 		ensureHost()
 	}
 	if len(args) == 0 || (len(args) == 1 && (args[0] == "help" || args[0] == "--help" || args[0] == "-h")) {
-		fmt.Fprintln(os.Stdout, "Usage: rmt <host>\n\nConnect to a host using the addresses in ~/.config/rmt/config.toml.\nType exit or press Ctrl-D to disconnect.")
+		fmt.Fprintln(os.Stdout, "Usage: rmt <host>\n\nConnect to a host using the addresses in ~/.rmt/settings.toml.\nType exit or press Ctrl-D to disconnect.\n\nExtensions: ~/.rmt/extensions/\nGuide: https://github.com/fschrhunt/rmt/blob/main/docs/extensions.md")
 		return
 	}
 	if len(args) != 1 {
@@ -77,6 +79,14 @@ func Main() {
 		log.Fatal("rmt: ", err)
 	}
 	ensureHost()
+	root, err := config.Dir()
+	if err != nil {
+		log.Fatal("rmt: ", err)
+	}
+	registry, err := extensions.Load(filepath.Join(root, "extensions"))
+	if err != nil {
+		log.Fatal("rmt: load extensions: ", err)
+	}
 	input := bufio.NewReader(os.Stdin)
 	address, err := client.PairAddress(name)
 	if err != nil {
@@ -91,7 +101,7 @@ func Main() {
 	if err != nil {
 		log.Fatal("rmt: ", err)
 	}
-	if err = prompt(name, remote, input, os.Stdout); err != nil {
+	if err = prompt(name, remote, input, os.Stdout, registry); err != nil {
 		log.Fatal("rmt: ", err)
 	}
 }
@@ -159,8 +169,10 @@ func escapeCompletion(value string) string {
 }
 
 // prompt edits input locally and sends ordinary commands to the connected shell.
-func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Writer) error {
+func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Writer, registry *extensions.Registry) error {
 	home := remote.Directory()
+	programs := registry.Programs()
+	supported := strings.Join(append([]string{"opencode", "codex"}, programs...), ", ")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var remoteMu sync.Mutex
@@ -256,7 +268,7 @@ func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Wr
 		if editor != nil {
 			editor.AppendHistory(line)
 		}
-		cmd, err := shell.Parse(line)
+		cmd, err := shell.Parse(line, programs...)
 		if err != nil {
 			fmt.Fprintln(output, "rmt:", err)
 			continue
@@ -266,7 +278,7 @@ func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Wr
 			return nil
 		}
 		if cmd.Unsupported != "" {
-			fmt.Fprintf(output, "rmt: %s is not supported. Supported applications: opencode, codex.\n", cmd.Unsupported)
+			fmt.Fprintf(output, "rmt: %s is not supported. Supported applications: %s.\n", cmd.Unsupported, supported)
 			continue
 		}
 		if cmd.Alias != "" {
@@ -284,17 +296,17 @@ func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Wr
 				remoteMu.Unlock()
 				continue
 			}
-			resolved := shell.AliasCommand(aliases.String(), cmd.Alias)
+			resolved := shell.AliasCommand(aliases.String(), cmd.Alias, programs...)
 			cmd.Program, cmd.Unsupported = resolved.Program, resolved.Unsupported
 			if cmd.Unsupported != "" {
-				fmt.Fprintf(output, "rmt: %s is not supported. Supported applications: opencode, codex.\n", cmd.Unsupported)
+				fmt.Fprintf(output, "rmt: %s is not supported. Supported applications: %s.\n", cmd.Unsupported, supported)
 				continue
 			}
 		}
 		if cmd.Program != "" {
 			signals := make(chan os.Signal, 1)
 			signal.Notify(signals, os.Interrupt)
-			err = client.Launch(ctx, name, cmd.Program, line, remote)
+			err = client.Launch(ctx, name, cmd.Program, line, remote, registry)
 			signal.Stop(signals)
 		} else {
 			_, err = remote.Run(line, output)

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/fschrhunt/rmt/src/config"
+	"github.com/fschrhunt/rmt/src/extensions"
 	"github.com/fschrhunt/rmt/src/network"
 	"github.com/fschrhunt/rmt/src/programs"
 )
@@ -128,10 +129,10 @@ func resolveTarget(name string) (target, error) {
 }
 
 // Launch opens a native program interface in the selected remote directory.
-func Launch(ctx context.Context, host, programName, line string, remote *Shell) error {
+func Launch(ctx context.Context, host, programName, line string, remote *Shell, registry *extensions.Registry) error {
 	dir := remote.Directory()
-	if programName != "opencode" && programName != "codex" {
-		return fmt.Errorf("unknown program %q (choose opencode or codex)", programName)
+	if programName != "opencode" && programName != "codex" && !registry.Has(programName) {
+		return fmt.Errorf("unknown program %q", programName)
 	}
 	target, e := resolveTarget(host)
 	if e != nil {
@@ -156,11 +157,13 @@ func Launch(ctx context.Context, host, programName, line string, remote *Shell) 
 	if problem := info.Problems[programName]; problem != "" {
 		return fmt.Errorf("%s: %s", host, problem)
 	}
-	if err := programs.Check(programName, false); err != nil {
-		return err
-	}
-	if local, remote := programs.Version(programName), info.Versions[programName]; local != "" && remote != "" && local != remote {
-		fmt.Fprintf(os.Stderr, "rmt: %s CLI versions differ (local %s, host %s); update them if the connection fails\n", programName, local, remote)
+	if programName == "opencode" || programName == "codex" {
+		if err := programs.Check(programName, false); err != nil {
+			return err
+		}
+		if local, remote := programs.Version(programName), info.Versions[programName]; local != "" && remote != "" && local != remote {
+			fmt.Fprintf(os.Stderr, "rmt: %s CLI versions differ (local %s, host %s); update them if the connection fails\n", programName, local, remote)
+		}
 	}
 	if !filepath.IsAbs(dir) {
 		return errors.New("host did not report an absolute current directory")
@@ -215,13 +218,16 @@ func Launch(ctx context.Context, host, programName, line string, remote *Shell) 
 		return fmt.Errorf("cannot prepare %s on %s: invalid host response (%s)", programName, host, prepared.Status)
 	}
 	dir, extra := launch.Directory, launch.Args
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/start", nil)
+	startContext, stopStart := signal.NotifyContext(ctx, os.Interrupt)
+	defer stopStart()
+	request, err := http.NewRequestWithContext(startContext, http.MethodPost, base+"/start", nil)
 	if err != nil {
 		return err
 	}
 	starter := *target.client
 	starter.Timeout = 25 * time.Second
 	response, err := starter.Do(request)
+	stopStart()
 	if err != nil {
 		return fmt.Errorf("cannot start %s on %s: %w", programName, host, err)
 	}
@@ -243,5 +249,8 @@ func Launch(ctx context.Context, host, programName, line string, remote *Shell) 
 		}
 		return programs.OpenCodeAt(endpoint, transport, dir, extra)
 	}
-	return programs.CodexDirect(*target.profile, base+"/proxy", dir, extra)
+	if programName == "codex" {
+		return programs.CodexDirect(*target.profile, base+"/proxy", dir, extra)
+	}
+	return programs.Custom(ctx, registry, *target.profile, base+"/proxy", programName, dir, extra)
 }

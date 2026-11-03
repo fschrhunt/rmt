@@ -48,7 +48,18 @@ func literal(w *syntax.Word) (string, bool) {
 }
 
 // Parse intercepts supported native clients and refuses known interactive programs.
-func Parse(line string) (Command, error) {
+func Parse(line string, extra ...string) (Command, error) {
+	supported := func(name string) bool {
+		if name == "opencode" || name == "codex" {
+			return true
+		}
+		for _, program := range extra {
+			if program == name {
+				return true
+			}
+		}
+		return false
+	}
 	parsed, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(line), "")
 	if err != nil {
 		// Let the host shell interpret syntax specific to its configured shell.
@@ -56,7 +67,7 @@ func Parse(line string) (Command, error) {
 		words := strings.Fields(line)
 		if len(words) > 0 {
 			name := filepath.Base(words[0])
-			if name == "opencode" || name == "codex" || interactive[name] {
+			if supported(name) || interactive[name] {
 				return Command{}, fmt.Errorf("invalid application command: %w", err)
 			}
 		}
@@ -102,10 +113,10 @@ func Parse(line string) (Command, error) {
 				break
 			}
 		}
-		if interactive[name] {
+		if interactive[name] && !supported(name) {
 			unsupported = name
 		}
-		if name == "opencode" || name == "codex" {
+		if supported(name) {
 			programName = name
 		}
 		if (name == "python" || name == "python3" || name == "node" || name == "irb") && len(call.Args) == 1 {
@@ -149,7 +160,7 @@ func Parse(line string) (Command, error) {
 }
 
 // AliasCommand identifies an alias whose expansion directly launches an interactive program.
-func AliasCommand(output, name string) Command {
+func AliasCommand(output, name string, extra ...string) Command {
 	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimPrefix(line, "alias ")
 		if !strings.HasPrefix(line, name+"=") {
@@ -167,7 +178,7 @@ func AliasCommand(output, name string) Command {
 		if !ok {
 			continue
 		}
-		command, err := Parse(value)
+		command, err := Parse(value, extra...)
 		if err == nil {
 			return command
 		}
