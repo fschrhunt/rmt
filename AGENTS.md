@@ -31,6 +31,7 @@ configuration or abstractions beyond what a change needs.
 - `src/services/`: automatic user service installation.
 - `*_test.go`: offline behavior tests; Go package tests live next to their code.
 - `README.md`: installation, usage, security boundaries and operational limitations.
+- `SECURITY.md`: private vulnerability reporting.
 - `docs/examples/`: extension examples.
 
 ## Conventions
