@@ -154,8 +154,8 @@ func TestLocalServiceURL(t *testing.T) {
 	}
 }
 
-// TestPrivateCodexSocketSupportsNativeSymlinks verifies the socket remains owner-only.
-func TestPrivateCodexSocketSupportsNativeSymlinks(t *testing.T) {
+// TestPrivateSocketSupportsNativeSymlinks verifies the socket remains owner-only.
+func TestPrivateSocketSupportsNativeSymlinks(t *testing.T) {
 	dir, err := os.MkdirTemp("/tmp", "rmt-socket-")
 	if err != nil {
 		t.Fatal(err)
@@ -174,13 +174,13 @@ func TestPrivateCodexSocketSupportsNativeSymlinks(t *testing.T) {
 	if err := os.Symlink(path, link); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := privateCodexSocket(link); err != nil {
+	if _, err := privateSocket(link); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Chmod(path, 0666); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := privateCodexSocket(link); err == nil {
+	if _, err := privateSocket(link); err == nil {
 		t.Fatal("accepted a publicly accessible socket")
 	}
 }
