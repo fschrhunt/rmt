@@ -28,7 +28,8 @@ case "$command" in
     fmt) [ "$#" -eq 0 ] || { [ "$#" -eq 1 ] && [ "$1" = --check ]; } || invalid ;;
 esac
 case "$command" in
-    check) ./x fmt --check; ./x lint; ./x test; ./x shell ;;
+    # Shell scripts run by tests are not Go source; force tests to notice script changes.
+    check) ./x fmt --check; ./x lint; ./x test -count=1 ./...; ./x shell ;;
     fmt)
         if [ "${1:-}" = --check ]; then
             unformatted=$(gofmt -l .)
