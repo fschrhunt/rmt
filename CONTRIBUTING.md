@@ -10,8 +10,8 @@ require a Tailscale connection, real programs, or model credentials.
 ./x build  # writes dist/rmt without replacing the installed binary
 ```
 
-`./x` defaults to `check`. Run `./x help` for the other commands. Use `./x dev` to run this
-checkout. Rebuilding does not restart an installed host service.
+`./x` defaults to `check` and delegates to `scripts/dev.sh`. Run `./x help` for the other
+commands. Use `./x dev` to run this checkout. Rebuilding does not restart an installed host service.
 
 `main.go` starts the CLI; implementation and tests live in packages under `src/`. See
 [AGENTS.md](AGENTS.md) for the package map and development conventions.
