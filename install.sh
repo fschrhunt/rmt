@@ -44,11 +44,13 @@ USAGE
 while [ "$#" -gt 0 ]; do
     case $1 in
         --version)
-            [ "$#" -ge 2 ] && [ -n "$2" ] || fail '--version needs a tag like v1.2.3'
+            [ "$#" -ge 2 ] || fail '--version needs a tag like v1.2.3'
+            [ -n "$2" ] || fail '--version needs a tag like v1.2.3'
             version=$2; shift 2 ;;
         --version=*) version=${1#--version=}; [ -n "$version" ] || fail '--version needs a tag'; shift ;;
         --dir)
-            [ "$#" -ge 2 ] && [ -n "$2" ] || fail '--dir needs a folder'
+            [ "$#" -ge 2 ] || fail '--dir needs a folder'
+            [ -n "$2" ] || fail '--dir needs a folder'
             dir=$2; shift 2 ;;
         --dir=*) dir=${1#--dir=}; [ -n "$dir" ] || fail '--dir needs a folder'; shift ;;
         -h|--help) usage; exit 0 ;;
