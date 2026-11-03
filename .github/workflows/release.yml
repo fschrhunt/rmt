@@ -1,9 +1,19 @@
 name: Release
 
-# Maintainers push a stable vX.Y.Z tag on main; this workflow never creates tags.
+# A reviewed release can be dispatched from main or started by a maintainer-pushed tag.
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Stable version, such as v1.2.3
+        required: true
+        type: string
+      commit:
+        description: Full SHA of the checked main commit
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -13,7 +23,52 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  tag:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate the checked commit and create its tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          COMMIT: ${{ inputs.commit }}
+        run: |
+          set -euo pipefail
+          [ "$GITHUB_REF" = refs/heads/main ] || { echo 'Dispatch releases from main.' >&2; exit 1; }
+          [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || { echo 'Invalid stable tag.' >&2; exit 1; }
+          [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo 'Invalid commit SHA.' >&2; exit 1; }
+          if [ "$COMMIT" != "$GITHUB_SHA" ] || [ "$COMMIT" != "$(git rev-parse HEAD)" ]; then
+            echo 'Main changed after the release was requested; check CI and retry.' >&2
+            exit 1
+          fi
+          awk -v tag="$TAG" '
+            /^## / { section = ($2 == tag); if (section) count++; next }
+            section && /[^[:space:]]/ { body = 1 }
+            END { exit !(count == 1 && body) }
+          ' CHANGELOG.md || { echo 'Missing or empty changelog section.' >&2; exit 1; }
+          result=$(gh run list --workflow ci.yml --branch main --event push --commit "$COMMIT" \
+            --json status,conclusion --jq '.[0] | "\(.status) \(.conclusion)"')
+          [ "$result" = 'completed success' ] || { echo 'CI has not passed for this main commit.' >&2; exit 1; }
+          [ -n "$RELEASE_TOKEN" ] || { echo 'Set RELEASE_TOKEN in repository Actions secrets.' >&2; exit 1; }
+          git show-ref --verify --quiet "refs/tags/$TAG" && { echo 'Release tag already exists.' >&2; exit 1; }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a "$TAG" -m "$TAG" "$COMMIT"
+          GH_TOKEN="$RELEASE_TOKEN" git -c credential.helper= -c 'credential.helper=!gh auth git-credential' \
+            push origin "refs/tags/$TAG"
+
   check:
+    if: github.event_name == 'push'
     permissions:
       actions: read
       contents: read
@@ -82,35 +137,7 @@ jobs:
       - name: Build and verify archives and checksums
         env:
           TAG: ${{ github.ref_name }}
-          CGO_ENABLED: '0'
-        run: |
-          mkdir -p dist
-          work=$(mktemp -d)
-          trap 'rm -rf "$work"' EXIT
-          for os in darwin linux; do
-            for arch in amd64 arm64; do
-              target="rmt_${TAG}_${os}_${arch}"
-              stage="$work/$target"
-              unpack="$work/verify-$target"
-              archive="dist/$target.tar.gz"
-              mkdir -p "$stage" "$unpack"
-              GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags='-s -w' -o "$stage/rmt" .
-              cp LICENSE "$stage/"
-              tar -C "$stage" -czf "$archive" rmt LICENSE
-
-              # Verify exact members, executable mode, bytes, and target without running rmt.
-              diff -u <(printf '%s\n' rmt LICENSE) <(tar -tzf "$archive")
-              tar -C "$unpack" -xzf "$archive"
-              test -x "$unpack/rmt"
-              cmp "$stage/rmt" "$unpack/rmt"
-              cmp LICENSE "$unpack/LICENSE"
-              metadata=$(go version -m "$unpack/rmt")
-              grep -q "GOOS=$os$" <<< "$metadata"
-              grep -q "GOARCH=$arch$" <<< "$metadata"
-              grep -q 'CGO_ENABLED=0$' <<< "$metadata"
-            done
-          done
-          (cd dist && sha256sum -- *.tar.gz > checksums.txt && sha256sum --check checksums.txt)
+        run: scripts/package.sh "$TAG" dist
       - name: Publish release with changelog notes
         env:
           GH_TOKEN: ${{ github.token }}

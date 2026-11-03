@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add a release preparation helper and check workflow syntax and release archives in CI.
 - Prepare a checksum-verified installer and Homebrew formula updates for release distribution.
 - Move extension examples under `docs/examples/`.
 - Publish verified macOS/Linux amd64/arm64 archives and SHA-256 checksums from stable version

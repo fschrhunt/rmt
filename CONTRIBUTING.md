@@ -29,14 +29,16 @@ Redact private paths, prompts, tokens, and other sensitive details before sharin
 
 ## Releases
 
-Move the release's entries from `Unreleased` into a nonempty `## vX.Y.Z - YYYY-MM-DD`
-changelog section, leaving `Unreleased` for future changes. Merge that change to `main` and
-run `./x check`. From an up-to-date `main`, create and push an annotated tag:
+From a clean, up-to-date `main` checkout with Git and authenticated `gh`, run:
 
 ```sh
-git tag -a v1.2.3 -m v1.2.3
-git push origin v1.2.3
+scripts/release.sh v1.2.3  # opens a PR to name the Unreleased changelog section
+scripts/release.sh v1.2.3  # after merging and updating main: requests the release
 ```
+
+The helper keeps the checkout on main, requires passing CI on its exact commit, and asks Actions
+to create the tag. Actions checks that main has not moved, validates the notes and CI again,
+and pushes the tag using `RELEASE_TOKEN`. A maintainer can also push a valid tag directly.
 
 Use a new stable semantic version with no leading zeros; prerelease and build suffixes are not
 supported. The [release workflow](.github/workflows/release.yml) rejects tags outside `main`'s
@@ -45,8 +47,8 @@ then runs `./x check`.
 It builds `rmt_vX.Y.Z_{darwin,linux}_{amd64,arm64}.tar.gz`, each containing an executable `rmt`
 and `LICENSE`, and verifies their contents, build targets, and `checksums.txt` before publishing
 a GitHub release with that version's changelog notes using the automatic `GITHUB_TOKEN`.
-The formula job uses the repository's `RELEASE_TOKEN` Actions secret to open a PR containing
-`rmt.rb`; review and merge that PR after CI passes. The token needs access to this repository
+The tag and formula jobs use the repository's `RELEASE_TOKEN` Actions secret to create the tag
+and open a PR containing `rmt.rb`; review and merge that PR after CI passes. The token needs access to this repository
 with Contents and Pull requests read/write. Keep it in GitHub Actions secrets, never in the
 repository. The formula job skips older releases and refuses to overwrite an existing release
 branch; if a retry reports an existing branch, inspect that branch and PR before changing it.

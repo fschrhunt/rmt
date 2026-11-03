@@ -196,6 +196,27 @@ func TestInstallRejectsChecksums(t *testing.T) {
 	}
 }
 
+// TestInstallPreservesBinaryOnDownloadFailure covers missing and truncated archives.
+func TestInstallPreservesBinaryOnDownloadFailure(t *testing.T) {
+	archive := releaseArchive(t, releaseMembers())
+	for _, scenario := range []string{"missing", "truncated"} {
+		t.Run(scenario, func(t *testing.T) {
+			fixture := archive
+			if scenario == "truncated" {
+				fixture = archive[:len(archive)/2]
+			}
+			f := newInstallFixture(t, fixture, nil)
+			if scenario == "missing" {
+				f.releases += "/missing"
+			}
+			if output, err := f.run(t, "--version", installTag); err == nil {
+				t.Fatalf("expected failed install: %s", output)
+			}
+			assertBinary(t, filepath.Join(f.dir, "rmt"), previousBinary)
+		})
+	}
+}
+
 // TestInstallRejectsUnsafeArchives rejects paths and nonregular or ambiguous
 // members before any extraction can affect the existing binary or outside files.
 func TestInstallRejectsUnsafeArchives(t *testing.T) {

@@ -18,7 +18,7 @@ configuration or abstractions beyond what a change needs.
 
 - `main.go`: command entry point.
 - `install.sh`: checksum-verified release installer.
-- `scripts/`: release packaging helpers and their offline tests.
+- `scripts/`: release preparation, archive packaging, formula helpers, and offline tests.
 - `src/cli/`: command dispatch, local prompt, and pairing.
 - `src/client/`: host connections and native application launches.
 - `src/hosts/`: host lifecycle and program supervision.
