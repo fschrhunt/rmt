@@ -20,17 +20,6 @@ import (
 	"github.com/fschrhunt/rmt/src/programs"
 )
 
-// freePort chooses an unused loopback port for a program backend.
-func freePort() (string, error) {
-	l, e := net.Listen("tcp", "127.0.0.1:0")
-	if e != nil {
-		return "", e
-	}
-	p := fmt.Sprint(l.Addr().(*net.TCPAddr).Port)
-	l.Close()
-	return p, nil
-}
-
 // Run starts the configured host and its native program backends.
 func Run() error {
 	cfg, e := config.Load()

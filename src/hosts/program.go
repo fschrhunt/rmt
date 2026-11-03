@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -259,13 +260,49 @@ func (m *shellSessions) serveProgram(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch action {
+	case "prepare":
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var request struct {
+			Command string `json:"command"`
+		}
+		if json.NewDecoder(io.LimitReader(r.Body, 128<<10)).Decode(&request) != nil || len(request.Command) > 64<<10 || request.Command == "" {
+			http.Error(w, "invalid program command", http.StatusBadRequest)
+			return
+		}
+		s.mu.Lock()
+		if s.closed || !s.attached || s.starting || s.running {
+			s.mu.Unlock()
+			http.Error(w, "session is busy or closed", http.StatusConflict)
+			return
+		}
+		s.starting = true
+		s.mu.Unlock()
+		result, err := s.sh.prepareProgram(request.Command, name)
+		s.mu.Lock()
+		s.starting = false
+		closed := s.closed || !s.attached
+		s.mu.Unlock()
+		if closed {
+			http.Error(w, "session closed", http.StatusConflict)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(struct{ Output, Error string }{result.Output, err.Error()})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(result)
 	case "start":
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 		s.mu.Lock()
-		if s.closed || !s.attached || s.starting {
+		if s.closed || !s.attached || s.starting || s.running {
 			s.mu.Unlock()
 			http.Error(w, "program is starting or session is closed", http.StatusConflict)
 			return
@@ -301,11 +338,18 @@ func (m *shellSessions) serveProgram(w http.ResponseWriter, r *http.Request) {
 	case "proxy":
 		s.mu.Lock()
 		b := s.program
-		s.mu.Unlock()
-		if b == nil || b.name != name {
+		if s.closed || b == nil || b.name != name {
+			s.mu.Unlock()
 			http.Error(w, "program is not attached", http.StatusServiceUnavailable)
 			return
 		}
+		s.proxying++
+		s.mu.Unlock()
+		defer func() {
+			s.mu.Lock()
+			s.proxying--
+			s.mu.Unlock()
+		}()
 		prefix := "/program/" + token + "/" + name + "/proxy"
 		http.StripPrefix(prefix, http.HandlerFunc(b.proxy)).ServeHTTP(w, r)
 	default:

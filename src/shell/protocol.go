@@ -8,7 +8,7 @@ type Request struct {
 }
 
 // Version identifies the compatible shell protocol.
-const Version = 4
+const Version = 7
 
 // Event is streamed command output, the current remote directory, or an error.
 type Event struct {

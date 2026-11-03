@@ -28,6 +28,8 @@ type shellSessions struct {
 	grace           time.Duration
 }
 
+var errSessionUnavailable = errors.New("shell session expired or unavailable")
+
 // shellSession keeps a command and its bounded output alive during a network interruption.
 type shellSession struct {
 	token, owner, directory   string
@@ -39,6 +41,7 @@ type shellSession struct {
 	events                    []shell.Event
 	size                      int
 	sequence                  uint64
+	proxying                  int
 	running, attached, closed bool
 	orphaned                  bool
 	timer                     *time.Timer
@@ -74,7 +77,7 @@ func (s *shellSession) addLocked(event shell.Event) {
 	s.changed = make(chan struct{})
 }
 
-// stop removes a shell and terminates any command still running in it.
+// stop removes a shell and lets commands already running in it finish.
 func (m *shellSessions) stop(s *shellSession) {
 	m.mu.Lock()
 	if m.sessions[s.token] != s {
@@ -116,6 +119,12 @@ func (m *shellSessions) stopDetached(s *shellSession, generation uint64) {
 	if s.running {
 		s.orphaned = true
 		s.timer = nil
+		s.mu.Unlock()
+		m.mu.Unlock()
+		return
+	}
+	if s.proxying > 0 {
+		s.timer = time.AfterFunc(m.grace, func() { m.stopDetached(s, generation) })
 		s.mu.Unlock()
 		m.mu.Unlock()
 		return
@@ -171,7 +180,7 @@ func (m *shellSessions) acquire(token, owner string) (*shellSession, bool, error
 	if token != "" {
 		s := m.sessions[token]
 		if s == nil || s.owner != owner {
-			return nil, false, errors.New("shell session expired or unavailable")
+			return nil, false, errSessionUnavailable
 		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -245,7 +254,11 @@ func (m *shellSessions) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	s, resumed, err := m.acquire(token, owner)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusConflict)
+		status := http.StatusConflict
+		if errors.Is(err, errSessionUnavailable) {
+			status = http.StatusGone
+		}
+		http.Error(w, err.Error(), status)
 		return
 	}
 	c, err := websocket.Accept(w, r, nil)
@@ -327,7 +340,7 @@ func (m *shellSessions) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		switch req.Type {
 		case "run":
 			s.mu.Lock()
-			if s.running || s.closed {
+			if s.running || s.starting || s.closed {
 				s.mu.Unlock()
 				return
 			}
@@ -353,7 +366,11 @@ func (m *shellSessions) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 			}(req.Command)
 		case "interrupt":
-			_ = s.sh.Interrupt()
+			s.mu.Lock()
+			if s.running || s.starting {
+				_ = s.sh.Interrupt()
+			}
+			s.mu.Unlock()
 		case "close":
 			graceful = true
 			return
