@@ -1,0 +1,122 @@
+name: Release
+
+# Maintainers push a stable vX.Y.Z tag on main; this workflow never creates tags.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    permissions:
+      actions: read
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Validate tag and changelog
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
+            echo "Expected a stable semantic version tag vX.Y.Z without leading zeros: $TAG" >&2
+            exit 1
+          }
+          git merge-base --is-ancestor HEAD origin/main || {
+            echo "$TAG is not on main" >&2
+            exit 1
+          }
+          awk -v tag="$TAG" '
+            /^## / { section = ($2 == tag); if (section) count++; next }
+            section && /[^[:space:]]/ { body = 1 }
+            END { exit !(count == 1 && body) }
+          ' CHANGELOG.md || {
+            echo "CHANGELOG.md must have exactly one nonempty ## $TAG section" >&2
+            exit 1
+          }
+      - name: Check main CI for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          commit=$(git rev-parse HEAD)
+          result=$(gh run list --workflow ci.yml --branch main --event push --commit "$commit" \
+            --json status,conclusion --jq '.[0] | "\(.status) \(.conclusion)"')
+          [ "$result" = 'completed success' ] || {
+            echo "Main CI for $commit is '$result'; it must pass before release." >&2
+            exit 1
+          }
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install ShellCheck if needed
+        run: |
+          if ! command -v shellcheck >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y shellcheck
+          fi
+      - run: ./x check
+
+  release:
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Build and verify archives and checksums
+        env:
+          TAG: ${{ github.ref_name }}
+          CGO_ENABLED: '0'
+        run: |
+          mkdir -p dist
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          for os in darwin linux; do
+            for arch in amd64 arm64; do
+              target="rmt_${TAG}_${os}_${arch}"
+              stage="$work/$target"
+              unpack="$work/verify-$target"
+              archive="dist/$target.tar.gz"
+              mkdir -p "$stage" "$unpack"
+              GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags='-s -w' -o "$stage/rmt" .
+              cp LICENSE "$stage/"
+              tar -C "$stage" -czf "$archive" rmt LICENSE
+
+              # Verify exact members, executable mode, bytes, and target without running rmt.
+              diff -u <(printf '%s\n' rmt LICENSE) <(tar -tzf "$archive")
+              tar -C "$unpack" -xzf "$archive"
+              test -x "$unpack/rmt"
+              cmp "$stage/rmt" "$unpack/rmt"
+              cmp LICENSE "$unpack/LICENSE"
+              metadata=$(go version -m "$unpack/rmt")
+              grep -q "GOOS=$os$" <<< "$metadata"
+              grep -q "GOARCH=$arch$" <<< "$metadata"
+              grep -q 'CGO_ENABLED=0$' <<< "$metadata"
+            done
+          done
+          (cd dist && sha256sum -- *.tar.gz > checksums.txt && sha256sum --check checksums.txt)
+      - name: Publish release with changelog notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          awk -v tag="$TAG" '/^## / { section = ($2 == tag); next } section' CHANGELOG.md > "$RUNNER_TEMP/release-notes.md"
+          test -s "$RUNNER_TEMP/release-notes.md"
+          gh release create "$TAG" dist/*.tar.gz dist/checksums.txt \
+            --verify-tag --title "$TAG" --notes-file "$RUNNER_TEMP/release-notes.md"

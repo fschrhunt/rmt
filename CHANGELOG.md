@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Publish verified macOS/Linux amd64/arm64 archives and SHA-256 checksums from stable version
+  tags on `main`, with GitHub release notes from this changelog.
 - Move the entry point to the repository root and settings and pairing state to `~/.rmt`.
 - Load trusted Lua extensions for launch preparation and custom HTTP or WebSocket program
   integrations. Application flags pass through by default instead of assuming a worktree helper.

@@ -51,8 +51,11 @@ keeping the same address and paired identity.
 
 Install rmt and the desired programs on each machine. The first time you run `rmt` or
 `rmt <host>` on a machine, rmt installs and starts its user host service automatically on macOS
-or Linux with systemd. It keeps an existing service intact. Build from source with `./x build`;
-install the resulting binary somewhere permanent before first use. The service uses the `PATH`
+or Linux with systemd. It keeps an existing service intact. Build from source with `./x build`
+or download a macOS/Linux archive from [GitHub Releases](https://github.com/fschrhunt/rmt/releases).
+Downloads require repository access while the repository is private; see the
+[release guide](CONTRIBUTING.md#releases) for checksum verification and the contributor process.
+Install the resulting binary somewhere permanent before first use. The service uses the `PATH`
 and non-secret native configuration paths from the first run. Existing service files are not
 rewritten. Environment-only credentials are not copied into the service file; use the program's
 own host-side authentication or configure the service environment separately. If its user service manager is unavailable,
