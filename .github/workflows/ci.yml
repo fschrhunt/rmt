@@ -45,7 +45,7 @@ jobs:
           for target in darwin_arm64 darwin_amd64 linux_arm64 linux_amd64; do
             printf '%064d  rmt_v0.0.0_%s.tar.gz\n' 0 "$target"
           done > "$RUNNER_TEMP/checksums.txt"
-          scripts/formula.sh v0.0.0 "$RUNNER_TEMP/checksums.txt" > "$RUNNER_TEMP/rmt.rb"
+          .github/release/formula.sh v0.0.0 "$RUNNER_TEMP/checksums.txt" > "$RUNNER_TEMP/rmt.rb"
           ruby -c "$RUNNER_TEMP/rmt.rb"
           if [ -f rmt.rb ]; then ruby -c rmt.rb; fi
       - run: ./x check
@@ -56,4 +56,4 @@ jobs:
       - run: ./x build
       - name: Verify release archives
         if: runner.os == 'Linux'
-        run: scripts/package.sh v0.0.0 "$RUNNER_TEMP/rmt-release"
+        run: .github/release/package.sh v0.0.0 "$RUNNER_TEMP/rmt-release"

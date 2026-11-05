@@ -3,7 +3,7 @@
 set -eu
 
 fail() { printf 'package: %s\n' "$*" >&2; exit 1; }
-[ "$#" -eq 2 ] || fail 'usage: scripts/package.sh vX.Y.Z OUTPUT_DIRECTORY'
+[ "$#" -eq 2 ] || fail 'usage: .github/release/package.sh vX.Y.Z OUTPUT_DIRECTORY'
 tag=$1
 out=$2
 case $tag in *[!v0-9.]* | '') fail 'invalid version' ;; esac

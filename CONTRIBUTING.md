@@ -30,8 +30,8 @@ Redact private paths, prompts, tokens, and other sensitive details before sharin
 From a clean, up-to-date `main` checkout with Git and authenticated `gh`, run:
 
 ```sh
-scripts/release.sh v1.2.3  # opens a PR to name the Unreleased changelog section
-scripts/release.sh v1.2.3  # after merging and updating main: requests the release
+.github/release/release.sh v1.2.3  # opens a PR to name the Unreleased changelog section
+.github/release/release.sh v1.2.3  # after merging and updating main: requests the release
 ```
 
 The helper keeps the checkout on main, requires passing CI on its exact commit, and asks Actions
@@ -45,6 +45,10 @@ then runs `./x check`.
 It builds `rmt_vX.Y.Z_{darwin,linux}_{amd64,arm64}.tar.gz`, each containing an executable `rmt`
 and `LICENSE`, and verifies their contents, build targets, and `checksums.txt` before publishing
 a GitHub release with that version's changelog notes using the automatic `GITHUB_TOKEN`.
+CI and releases use `.github/release/package.sh`; from the repository root, run
+`.github/release/package.sh v0.0.0 /tmp/rmt-release` to build and verify the same
+four archives without publishing. Release preparation and formula helpers also
+live in `.github/release/`; `./x shell` includes those scripts in ShellCheck.
 The release workflow attests the four archives and `checksums.txt` using GitHub provenance.
 The tag and formula jobs use the repository's `RELEASE_TOKEN` Actions secret to create the tag
 and open a PR containing `rmt.rb`; review and merge that PR after CI passes. The token needs access to this repository

@@ -144,7 +144,7 @@ jobs:
       - name: Build and verify archives and checksums
         env:
           TAG: ${{ github.ref_name }}
-        run: scripts/package.sh "$TAG" dist
+        run: .github/release/package.sh "$TAG" dist
       - name: Attest release artifacts
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
@@ -198,7 +198,7 @@ jobs:
           gh attestation verify "$RUNNER_TEMP/checksums.txt" --repo "$GITHUB_REPOSITORY" \
             --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
             --source-ref "refs/tags/$TAG" --source-digest "$GITHUB_SHA" --deny-self-hosted-runners
-          scripts/formula.sh "$TAG" "$RUNNER_TEMP/checksums.txt" > rmt.rb
+          .github/release/formula.sh "$TAG" "$RUNNER_TEMP/checksums.txt" > rmt.rb
           ruby -c rmt.rb
           git add -- rmt.rb
           git diff --cached --quiet && exit 0
