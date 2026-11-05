@@ -45,7 +45,7 @@ case "$command" in
     test) if [ "$#" -eq 0 ]; then set -- ./...; fi; go test "$@" ;;
     shell)
         command -v shellcheck >/dev/null 2>&1 || { printf 'shellcheck is not on PATH\n' >&2; exit 2; }
-        shellcheck x install.sh .githooks/pre-commit scripts/*.sh
+        shellcheck x install.sh .githooks/pre-commit .github/release/*.sh
         ;;
     build) mkdir -p dist; go build -o dist/rmt . ;;
     dev) exec go run . "$@" ;;

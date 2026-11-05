@@ -3,7 +3,7 @@
 set -eu
 
 fail() { printf 'release: %s\n' "$*" >&2; exit 1; }
-[ "$#" -eq 1 ] || fail 'usage: scripts/release.sh vX.Y.Z'
+[ "$#" -eq 1 ] || fail 'usage: .github/release/release.sh vX.Y.Z'
 tag=$1
 case $tag in *[!v0-9.]* | '') fail 'expected a stable version such as v1.2.3' ;; esac
 printf '%s\n' "$tag" | LC_ALL=C grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' ||
@@ -49,8 +49,8 @@ if [ "$count" -eq 0 ]; then
     git -C "$work" -c core.hooksPath=/dev/null commit -qm "release: $tag"
     git -C "$work" push -q -u origin "$branch"
     (cd "$work" && gh pr create --base main --head "$branch" --title "release: $tag" \
-        --body "Prepare the changelog for $tag. After merging, run scripts/release.sh $tag on main.")
-    printf 'Merge the release PR, update main, then run scripts/release.sh %s again.\n' "$tag"
+        --body "Prepare the changelog for $tag. After merging, run .github/release/release.sh $tag on main.")
+    printf 'Merge the release PR, update main, then run .github/release/release.sh %s again.\n' "$tag"
     exit 0
 fi
 

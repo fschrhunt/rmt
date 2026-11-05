@@ -19,7 +19,7 @@ configuration or abstractions beyond what a change needs.
 
 - `main.go`: command entry point.
 - `install.sh`: checksum-verified release installer.
-- `scripts/`: release preparation, archive packaging, and formula helpers.
+- `.github/release/`: release preparation, archive packaging, and formula helpers.
 - `src/cli/`: command dispatch, local prompt, and pairing.
 - `src/client/`: host connections and native application launches.
 - `src/hosts/`: host lifecycle and program supervision.
