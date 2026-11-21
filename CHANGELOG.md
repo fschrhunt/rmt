@@ -2,9 +2,12 @@
 
 ## Unreleased
 
+## v0.1.0 - 2026-11-21
+
+- Add a release dry run and verify published installs on macOS and Linux with `rmt --version`.
 - Add `[prompt] style = "pure" | "inherit"` so clients can use rmt's stock appearance or
-  inherit only the colors and symbols from the host user's zsh prompt settings. The host exposes an
-  authenticated style endpoint; rmt keeps control of the layout, segments and error coloring.
+  inherit Pure's colors and symbols from the local user's zsh settings. rmt keeps control of the
+  layout and shows remote machine and repository information.
 - Render rmt's stock local prompt with the host user and short name, abbreviated path, git branch
   and state, slow-command time, and an error-colored symbol. Add an authenticated host git-status
   endpoint and bump the shell protocol to 9.

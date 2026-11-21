@@ -3,7 +3,9 @@
 set -eu
 
 fail() { printf 'release: %s\n' "$*" >&2; exit 1; }
-[ "$#" -eq 1 ] || fail 'usage: .github/release/release.sh vX.Y.Z'
+dry_run=false
+if [ "${1-}" = --dry-run ]; then dry_run=true; shift; fi
+[ "$#" -eq 1 ] || fail 'usage: .github/release/release.sh [--dry-run] vX.Y.Z'
 tag=$1
 case $tag in *[!v0-9.]* | '') fail 'expected a stable version such as v1.2.3' ;; esac
 printf '%s\n' "$tag" | LC_ALL=C grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' ||
@@ -26,6 +28,7 @@ cleanup() {
 count=$(awk -v tag="$tag" '/^## / && $2 == tag { n++ } END { print n+0 }' CHANGELOG.md)
 [ "$count" -le 1 ] || fail "CHANGELOG.md has duplicate $tag sections"
 if [ "$count" -eq 0 ]; then
+    [ "$dry_run" = false ] || fail "merge changelog notes for $tag before running a dry run"
     awk '
         /^## / { in_notes = ($0 == "## Unreleased"); if (in_notes) count++; next }
         in_notes && /[^[:space:]]/ { body = 1 }
@@ -64,5 +67,6 @@ commit=$(git rev-parse HEAD)
 result=$(gh run list --workflow ci.yml --branch main --event push --commit "$commit" \
     --json status,conclusion --jq '.[0] | "\(.status) \(.conclusion)"')
 [ "$result" = 'completed success' ] || fail "main CI for $commit has not passed: ${result:-not found}"
-gh workflow run release.yml --ref main -f "tag=$tag" -f "commit=$commit"
-printf 'Requested release %s for %s. Watch it in GitHub Actions.\n' "$tag" "$commit"
+gh workflow run release.yml --ref main -f "tag=$tag" -f "commit=$commit" -f "dry_run=$dry_run"
+printf 'Requested %s for %s at %s. Watch it in GitHub Actions.\n' \
+    "$(if [ "$dry_run" = true ]; then echo 'a release dry run'; else echo 'a release'; fi)" "$tag" "$commit"

@@ -2,8 +2,6 @@ package cli
 
 import (
 	"testing"
-
-	"github.com/fschrhunt/rmt/src/shell"
 )
 
 // TestColorCode maps Pure's color names and numbers and rejects anything else.
@@ -40,7 +38,7 @@ func TestSafeSymbol(t *testing.T) {
 
 // TestThemeFromStyle overlays inherited values while retaining stock defaults.
 func TestThemeFromStyle(t *testing.T) {
-	tm := themeFromStyle(shell.Style{Path: "33", Symbol: "→", PromptError: "red"})
+	tm := themeFromStyle(style{Path: "33", Symbol: "→", PromptError: "red"})
 	if tm.path != "\x1b[38;5;33m" || tm.symbol != "→" || tm.promptError != "\x1b[31m" {
 		t.Fatalf("style not applied: %+v", tm)
 	}

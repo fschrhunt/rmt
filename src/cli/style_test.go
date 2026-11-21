@@ -1,14 +1,10 @@
-package hosts
+package cli
 
 import (
-	"encoding/json"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
-
-	"github.com/fschrhunt/rmt/src/shell"
 )
 
 // TestParseStyle reads only tagged lines from the host's style query.
@@ -38,21 +34,20 @@ func TestParseStyleHostFallback(t *testing.T) {
 	}
 }
 
-// TestStyleHandler imports a partial Pure config without requiring Pure or a real home.
-func TestStyleHandler(t *testing.T) {
+// TestLocalStyle imports a partial Pure config from the client's home.
+func TestLocalStyle(t *testing.T) {
 	zsh, err := exec.LookPath("zsh")
 	if err != nil {
 		t.Skip("zsh unavailable")
 	}
 	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SHELL", zsh)
 	t.Setenv("ZDOTDIR", home)
 	if err := os.WriteFile(filepath.Join(home, ".zshrc"), []byte("print startup\nzstyle ':prompt:pure:path' color 33\nPURE_PROMPT_SYMBOL='>>'\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	w := httptest.NewRecorder()
-	styleHandler(home, zsh).ServeHTTP(w, httptest.NewRequest("GET", "/style", nil))
-	var got shell.Style
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || got.Path != "33" || got.Symbol != ">>" {
-		t.Fatalf("style = %+v, error = %v", got, err)
+	if got := localStyle(); got.Path != "33" || got.Symbol != ">>" {
+		t.Fatalf("style = %+v", got)
 	}
 }

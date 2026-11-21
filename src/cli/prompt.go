@@ -294,9 +294,7 @@ func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Wr
 	t := stockTheme()
 	terminal := os.Getenv("TERM") != "dumb" && readline.IsTerminal(int(os.Stdin.Fd())) && readline.IsTerminal(int(os.Stdout.Fd()))
 	if cfg, err := config.Load(); terminal && err == nil && cfg.Prompt.Style == "inherit" {
-		if style, err := client.Style(name); err == nil {
-			t = themeFromStyle(style)
-		}
+		t = themeFromStyle(localStyle())
 	}
 	home := remote.Home()
 	if home == "" {

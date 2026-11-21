@@ -1,19 +1,21 @@
-package hosts
+package cli
 
 import (
 	"bytes"
 	"context"
-	"encoding/json"
-	"errors"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/fschrhunt/rmt/src/shell"
 )
+
+// style is the local Pure settings; empty fields keep stock styling.
+type style struct {
+	User, Path, GitBranch, GitDirty, GitAction, GitArrow, GitStash string
+	Execution, PromptOK, PromptError                               string
+	Symbol, DownArrow, UpArrow, Stash                              string
+}
 
 // styleScript reads only Pure's color settings and symbols from the user's zsh config.
 const styleScript = `
@@ -47,60 +49,36 @@ _style_symbol PURE_GIT_STASH_SYMBOL stash
 true
 `
 
-// styleHandler exposes the user's prompt styling so clients can inherit it.
-func styleHandler(home, shellPath string) http.Handler {
-	if shellPath == "" {
-		shellPath = os.Getenv("SHELL")
-	}
-	if shellPath == "" || !filepath.IsAbs(shellPath) {
-		if found, err := exec.LookPath("zsh"); err == nil {
-			shellPath = found
-		}
-	}
-	if filepath.Base(shellPath) != "zsh" {
-		shellPath = ""
-	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		if shellPath == "" {
-			_ = json.NewEncoder(w).Encode(shell.Style{})
-			return
-		}
-		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, shellPath, "-f", "-c", styleScript)
-		cmd.Dir = home
-		cmd.Env = append(os.Environ(), "HOME="+home, "TERM=dumb")
-		out, err := promptOutput(cmd)
+// localStyle reads the client's zsh settings, falling back when zsh or Pure settings are unavailable.
+func localStyle() style {
+	zsh := os.Getenv("SHELL")
+	if !filepath.IsAbs(zsh) || filepath.Base(zsh) != "zsh" {
+		var err error
+		zsh, err = exec.LookPath("zsh")
 		if err != nil {
-			_ = json.NewEncoder(w).Encode(shell.Style{})
-			return
+			return style{}
 		}
-		_ = json.NewEncoder(w).Encode(parseStyle(out))
-	})
-}
-
-// promptOutput limits metadata output and stops waiting for inherited pipes.
-func promptOutput(cmd *exec.Cmd) ([]byte, error) {
-	var out limitedOutput
-	cmd.Stdout = &out
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return style{}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, zsh, "-f", "-c", styleScript)
+	cmd.Dir = home
+	cmd.Env = append(os.Environ(), "TERM=dumb")
 	cmd.WaitDelay = 100 * time.Millisecond
-	if err := cmd.Run(); err != nil {
-		return nil, err
+	out, err := cmd.Output()
+	if err != nil {
+		return style{}
 	}
-	if out.overflow {
-		return nil, errors.New("prompt metadata output is too large")
-	}
-	return out.data.Bytes(), nil
+	return parseStyle(out)
 }
 
 // parseStyle collects short tagged records printed by styleScript.
-func parseStyle(out []byte) shell.Style {
-	var style shell.Style
+func parseStyle(out []byte) style {
+	var style style
 	hostColor := ""
 	for record := range bytes.SplitSeq(out, []byte{0}) {
 		parts := strings.SplitN(string(record), "\t", 3)

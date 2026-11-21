@@ -126,7 +126,6 @@ func Run() error {
 		mux.Handle("/shell", paired.Auth(commands))
 		mux.Handle("/complete", paired.Auth(completionHandler(home)))
 		mux.Handle("/git", paired.Auth(gitHandler()))
-		mux.Handle("/style", paired.Auth(styleHandler(home, cfg.Shell)))
 		mux.Handle("/program/", paired.Auth(http.HandlerFunc(commands.serveProgram)))
 		srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 		go func() { failed <- srv.Serve(tls.NewListener(direct, paired.TLS())) }()

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -119,5 +120,14 @@ func gitActionDir(gitDir string) string {
 func runGit(ctx context.Context, dir string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
 	cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0", "GIT_PAGER=cat", "LC_ALL=C")
-	return promptOutput(cmd)
+	var out limitedOutput
+	cmd.Stdout = &out
+	cmd.WaitDelay = 100 * time.Millisecond
+	if err := cmd.Run(); err != nil {
+		return nil, err
+	}
+	if out.overflow {
+		return nil, errors.New("git metadata output is too large")
+	}
+	return out.data.Bytes(), nil
 }

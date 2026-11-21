@@ -4,8 +4,6 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
-
-	"github.com/fschrhunt/rmt/src/shell"
 )
 
 // theme holds the SGR codes and symbols used to draw the local prompt.
@@ -73,7 +71,7 @@ func safeSymbol(value, fallback string) string {
 }
 
 // themeFromStyle overlays inherited styling on stock defaults.
-func themeFromStyle(style shell.Style) theme {
+func themeFromStyle(style style) theme {
 	t := stockTheme()
 	t.user = colorCode(style.User, t.user)
 	t.path = colorCode(style.Path, t.path)
