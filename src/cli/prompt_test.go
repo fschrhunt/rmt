@@ -36,13 +36,13 @@ func TestHumanDuration(t *testing.T) {
 // TestRenderPreprompt reproduces Pure's first line and symbols.
 func TestRenderPreprompt(t *testing.T) {
 	info := shell.Git{Branch: "main", Dirty: true, Ahead: 2, Behind: 1, Stash: 1}
-	got := renderPreprompt("mini", "fschr", "mini", "/home/fschr", "/home/fschr/dev/rmt", info, true, 65*time.Second, false)
+	got := renderPreprompt("mini", "fschr", "mini", "/home/fschr", "/home/fschr/dev/rmt", info, true, 65*time.Second, stockTheme(), false)
 	want := "fschr@mini ~/dev/rmt main* ⇣⇡ ≡ 1m 5s"
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 
-	got = renderPreprompt("mini", "fschr", "mini", "/home/fschr", "/home/fschr", shell.Git{}, false, time.Second, false)
+	got = renderPreprompt("mini", "fschr", "mini", "/home/fschr", "/home/fschr", shell.Git{}, false, time.Second, stockTheme(), false)
 	if got != "fschr@mini ~" {
 		t.Fatalf("got %q", got)
 	}
@@ -50,13 +50,13 @@ func TestRenderPreprompt(t *testing.T) {
 
 // TestRenderPrompt keeps the symbol red only after a failed command.
 func TestRenderPrompt(t *testing.T) {
-	if got, want := renderPrompt(0, false), "❯ "; got != want {
+	if got, want := renderPrompt(0, stockTheme(), false), "❯ "; got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
-	if got := renderPrompt(0, true); got != colorPromptOK+"❯"+colorReset+" " {
+	if got := renderPrompt(0, stockTheme(), true); got != colorPromptOK+"❯"+colorReset+" " {
 		t.Fatalf("got %q", got)
 	}
-	if got := renderPrompt(1, true); got != colorPromptError+"❯"+colorReset+" " {
+	if got := renderPrompt(1, stockTheme(), true); got != colorPromptError+"❯"+colorReset+" " {
 		t.Fatalf("got %q", got)
 	}
 }

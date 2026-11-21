@@ -18,6 +18,7 @@ import (
 
 	"github.com/ergochat/readline"
 	"github.com/fschrhunt/rmt/src/client"
+	"github.com/fschrhunt/rmt/src/config"
 	"github.com/fschrhunt/rmt/src/extensions"
 	"github.com/fschrhunt/rmt/src/shell"
 )
@@ -86,7 +87,7 @@ func humanDuration(d time.Duration) string {
 }
 
 // renderPreprompt builds Pure's first line: machine, path, git state and slow command time.
-func renderPreprompt(name, user, host, home, dir string, git shell.Git, hasGit bool, duration time.Duration, color bool) string {
+func renderPreprompt(name, user, host, home, dir string, git shell.Git, hasGit bool, duration time.Duration, t theme, color bool) string {
 	machine := host
 	if machine == "" {
 		machine = name
@@ -96,49 +97,48 @@ func renderPreprompt(name, user, host, home, dir string, git shell.Git, hasGit b
 	}
 	parts := make([]string, 0, 8)
 	if machine != "" {
-		parts = append(parts, paint(colorUser, machine, color))
+		parts = append(parts, paint(t.user, machine, color))
 	}
-	parts = append(parts, paint(colorPath, abbreviateHome(home, dir), color))
+	parts = append(parts, paint(t.path, abbreviateHome(home, dir), color))
 	if hasGit && git.Branch != "" {
-		branch := paint(colorGitBranch, git.Branch, color)
+		branch := paint(t.gitBranch, git.Branch, color)
 		if git.Dirty {
-			branch += paint(colorGitDirty, "*", color)
+			branch += paint(t.gitDirty, "*", color)
 		}
 		parts = append(parts, branch)
 		if git.Action != "" {
-			parts = append(parts, paint(colorGitAction, git.Action, color))
+			parts = append(parts, paint(t.gitAction, git.Action, color))
 		}
 		if git.Behind > 0 || git.Ahead > 0 {
 			arrows := ""
 			if git.Behind > 0 {
-				arrows += "⇣"
+				arrows += t.downArrow
 			}
 			if git.Ahead > 0 {
-				arrows += "⇡"
+				arrows += t.upArrow
 			}
-			parts = append(parts, paint(colorGitArrow, arrows, color))
+			parts = append(parts, paint(t.gitArrow, arrows, color))
 		}
 		if git.Stash > 0 {
-			parts = append(parts, paint(colorGitArrow, "≡", color))
+			parts = append(parts, paint(t.gitStash, t.stash, color))
 		}
 	}
 	if duration > 5*time.Second {
-		parts = append(parts, paint(colorExecution, humanDuration(duration), color))
+		parts = append(parts, paint(t.execution, humanDuration(duration), color))
 	}
 	return strings.Join(parts, " ")
 }
 
 // renderPrompt builds Pure's editable line, red after a failed command.
-func renderPrompt(status int, color bool) string {
-	symbol := "❯"
+func renderPrompt(status int, t theme, color bool) string {
 	if !color {
-		return symbol + " "
+		return t.symbol + " "
 	}
-	c := colorPromptOK
+	c := t.promptOK
 	if status != 0 {
-		c = colorPromptError
+		c = t.promptError
 	}
-	return c + symbol + colorReset + " "
+	return c + t.symbol + colorReset + " "
 }
 
 // isTerminal reports whether rmt may use terminal editing and ANSI colors.
@@ -282,6 +282,12 @@ func (c *gitCache) get(directory string) (shell.Git, bool) {
 
 // prompt edits input locally and sends ordinary commands to the connected shell.
 func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Writer, registry *extensions.Registry) error {
+	t := stockTheme()
+	if cfg, err := config.Load(); err == nil && cfg.Prompt.Style == "inherit" {
+		if style, err := client.Style(name); err == nil {
+			t = themeFromStyle(style)
+		}
+	}
 	home := remote.Home()
 	if home == "" {
 		home = remote.Directory()
@@ -314,9 +320,9 @@ func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Wr
 	defer func() { remote.Close() }()
 
 	var editor *readline.Instance
-	if isTerminal(os.Stdin) && isTerminal(os.Stdout) {
+	if os.Getenv("TERM") != "dumb" && isTerminal(os.Stdin) && isTerminal(os.Stdout) {
 		editor, _ = readline.NewFromConfig(&readline.Config{
-			Prompt:          renderPrompt(0, true),
+			Prompt:          renderPrompt(0, t, true),
 			AutoComplete:    remoteCompleter{name: name, directory: func() string { return remote.Directory() }},
 			InterruptPrompt: "^C",
 			EOFPrompt:       "",
@@ -337,9 +343,9 @@ func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Wr
 		if editor != nil {
 			fmt.Fprint(output, "\n")
 			info, ready := git.get(dir)
-			fmt.Fprint(output, renderPreprompt(name, remote.User(), remote.Host(), home, dir, info, ready, duration, true))
+			fmt.Fprint(output, renderPreprompt(name, remote.User(), remote.Host(), home, dir, info, ready, duration, t, true))
 			fmt.Fprintln(output)
-			editor.SetPrompt(renderPrompt(status, true))
+			editor.SetPrompt(renderPrompt(status, t, true))
 			line, err = editor.ReadLine()
 			if errors.Is(err, readline.ErrInterrupt) {
 				continue
