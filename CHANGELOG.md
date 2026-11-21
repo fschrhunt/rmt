@@ -2,10 +2,10 @@
 
 ## Unreleased
 
-- Add `[prompt] style = "pure" | "inherit"` so clients can use rmt's stock Pure appearance or
+- Add `[prompt] style = "pure" | "inherit"` so clients can use rmt's stock appearance or
   inherit only the colors and symbols from the host user's zsh prompt settings. The host exposes an
   authenticated style endpoint; rmt keeps control of the layout, segments and error coloring.
-- Render a Pure-style local prompt with the host user and short name, abbreviated path, git branch
+- Render rmt's stock local prompt with the host user and short name, abbreviated path, git branch
   and state, slow-command time, and an error-colored symbol. Add an authenticated host git-status
   endpoint and bump the shell protocol to 9.
 - Add paired loopback client–host validation and opt-in shell startup and command latency

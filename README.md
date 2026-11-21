@@ -17,13 +17,14 @@ fschr@mini ~/dev/my-project main*
 [rmt is exiting]
 ```
 
-The local prompt follows Pure's stock appearance: a machine and path line followed by `❯`, which
-turns red after a failed command. Git branch, dirty marker, ahead/behind arrows, stash marker and
-slow-command time are read from the host in the background, so they can lag one command behind.
-rmt renders this itself. By default it uses Pure's stock colors and symbols. With
-`[prompt] style = "inherit"` it reads only your zsh prompt's colors and symbols from the host and
-uses them in the same layout. It never imports zsh hooks, the terminal title, a vi-mode indicator,
-or git fetch; the machine name is the host user and short hostname reported by the host service.
+The local prompt is rmt's stock look: a machine and path line followed by `❯`, which turns red after
+a failed command. It uses Pure's default colors and symbols. Git branch, dirty marker, ahead/behind
+arrows, stash marker and slow-command time are read from the host in the background, so they can lag
+one command behind. rmt renders this itself; select the stock look with `[prompt] style = "pure"`
+(the default). With `[prompt] style = "inherit"` it reads only your zsh prompt's colors and symbols
+from the host and uses them in the same layout. It never imports zsh hooks, the terminal title, a
+vi-mode indicator, or git fetch; the machine name is the host user and short hostname reported by
+the host service.
 If the style query fails, rmt falls back to the stock defaults.
 
 The prompt starts in the host user's home directory. `cd`, shell variables, and the environment
