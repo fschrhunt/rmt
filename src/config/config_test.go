@@ -8,12 +8,33 @@ import (
 
 func TestConfigValidation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.toml")
-	for _, data := range []string{`shell = "relative"`, `listen = "0.0.0.0:nope"`, `programs = []`, `unknown = true`, "[hosts]\nx='https://x'\nX='https://y'"} {
+	for _, data := range []string{`shell = "relative"`, `listen = "0.0.0.0:nope"`, `programs = []`, `unknown = true`, `[prompt]
+style = "zsh"`, "[hosts]\nx='https://x'\nX='https://y'"} {
 		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := Read(path); err == nil {
 			t.Errorf("accepted %s", data)
+		}
+	}
+}
+
+func TestReadPromptStyle(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.toml")
+	for _, tc := range []struct{ text, want string }{
+		{"[prompt]\nstyle = \"inherit\"\n", "inherit"},
+		{"[prompt]\nstyle = \"pure\"\n", "pure"},
+		{"", ""},
+	} {
+		if err := os.WriteFile(path, []byte(tc.text), 0600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Read(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Prompt.Style != tc.want {
+			t.Fatalf("%q: got %q, want %q", tc.text, cfg.Prompt.Style, tc.want)
 		}
 	}
 }

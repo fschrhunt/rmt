@@ -14,6 +14,10 @@ on:
         description: Full SHA of the checked main commit
         required: true
         type: string
+      dry_run:
+        description: Verify packaging without tagging or publishing
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -26,7 +30,7 @@ jobs:
   tag:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       actions: read
       contents: read
@@ -36,12 +40,17 @@ jobs:
           ref: main
           fetch-depth: 0
           persist-credentials: false
-      - name: Validate the checked commit and create its tag
+      - if: inputs.dry_run
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          check-latest: true
+      - name: Validate the checked commit
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           TAG: ${{ inputs.tag }}
           COMMIT: ${{ inputs.commit }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
           [ "$GITHUB_REF" = refs/heads/main ] || { echo 'Dispatch releases from main.' >&2; exit 1; }
@@ -59,8 +68,22 @@ jobs:
           result=$(gh run list --workflow ci.yml --branch main --event push --commit "$COMMIT" \
             --json status,conclusion --jq '.[0] | "\(.status) \(.conclusion)"')
           [ "$result" = 'completed success' ] || { echo 'CI has not passed for this main commit.' >&2; exit 1; }
-          [ -n "$RELEASE_TOKEN" ] || { echo 'Set RELEASE_TOKEN in repository Actions secrets.' >&2; exit 1; }
           git show-ref --verify --quiet "refs/tags/$TAG" && { echo 'Release tag already exists.' >&2; exit 1; }
+          if [ "$DRY_RUN" = true ]; then
+            .github/release/package.sh "$TAG" "$RUNNER_TEMP/dist"
+            .github/release/formula.sh "$TAG" "$RUNNER_TEMP/dist/checksums.txt" > "$RUNNER_TEMP/rmt.rb"
+            ruby -c "$RUNNER_TEMP/rmt.rb"
+            exit 0
+          fi
+      - name: Push the release tag
+        if: ${{ !inputs.dry_run }}
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          COMMIT: ${{ inputs.commit }}
+        run: |
+          set -euo pipefail
+          [ -n "$RELEASE_TOKEN" ] || { echo 'Set RELEASE_TOKEN in repository Actions secrets.' >&2; exit 1; }
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git tag -a "$TAG" -m "$TAG" "$COMMIT"
@@ -168,7 +191,7 @@ jobs:
             --verify-tag --title "$TAG" --notes-file "$RUNNER_TEMP/release-notes.md"
 
   formula:
-    needs: release
+    needs: install
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -215,3 +238,22 @@ jobs:
           GH_TOKEN="$RELEASE_TOKEN" gh pr create --base main --head "$branch" \
             --title "release: update Homebrew formula for $TAG" \
             --body "Update the Homebrew formula using the attested release checksums. Review and merge after CI passes."
+
+  install:
+    needs: release
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install and run the published binary
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          sh install.sh --version "$TAG" --dir "$RUNNER_TEMP/rmt-install"
+          test "$("$RUNNER_TEMP/rmt-install/rmt" --version)" = "rmt version ${TAG#v}"

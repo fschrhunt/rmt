@@ -90,8 +90,7 @@ class Rmt < Formula
   end
 
   test do
-    # Running rmt starts user services; inspect the installed binary without executing it.
-    assert_predicate bin/"rmt", :executable?
+    assert_equal "rmt version #{version}", shell_output("#{bin}/rmt --version").strip
   end
 end
 RUBY

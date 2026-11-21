@@ -31,12 +31,15 @@ From a clean, up-to-date `main` checkout with Git and authenticated `gh`, run:
 
 ```sh
 .github/release/release.sh v1.2.3  # opens a PR to name the Unreleased changelog section
+.github/release/release.sh --dry-run v1.2.3  # after merging: verify archives and formula without publishing
 .github/release/release.sh v1.2.3  # after merging and updating main: requests the release
 ```
 
 The helper keeps the checkout on main, requires passing CI on its exact commit, and asks Actions
 to create the tag. Actions checks that main has not moved, validates the notes and CI again,
 and pushes the tag using `RELEASE_TOKEN`. A maintainer can also push a valid tag directly.
+After publishing, the workflow installs the release on macOS and Linux and checks `rmt --version`
+before proposing the Homebrew update.
 
 Use a new stable semantic version with no leading zeros; prerelease and build suffixes are not
 supported. The [release workflow](.github/workflows/release.yml) rejects tags outside `main`'s

@@ -30,16 +30,14 @@ func completionHandler(home string) http.Handler {
 			return
 		}
 		full := prefix
-		if prefix == "~" {
-			full = home
-		} else if strings.HasPrefix(prefix, "~/") {
+		if strings.HasPrefix(prefix, "~/") {
 			full = filepath.Join(home, prefix[2:])
 		} else if !filepath.IsAbs(prefix) {
 			full = filepath.Join(request.Directory, prefix)
 		}
 		base := filepath.Base(full)
 		dir := filepath.Dir(full)
-		if strings.HasSuffix(prefix, "/") {
+		if prefix == "" || strings.HasSuffix(prefix, "/") {
 			dir = full
 			base = ""
 		}

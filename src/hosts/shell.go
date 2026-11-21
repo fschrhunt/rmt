@@ -100,7 +100,8 @@ func (s *commandShell) Run(command string, output func([]byte) error) (string, i
 	}
 	// Eval's stdin is closed so a program cannot consume the shell's control stream.
 	statusVar := "__rmt_" + string(s.marker[1:])
-	script := fmt.Sprintf("(exit %d)\n", s.status) + "eval " + quoteShell(command) + " </dev/null\n" + statusVar + "=$?\ncommand printf '\\036" + string(s.marker[1:]) + "%s\\000%s\\000' \"$" + statusVar + "\" \"$(pwd -P)\"\n"
+	// The suffix protects trailing newlines in the directory from command substitution.
+	script := fmt.Sprintf("(exit %d)\n", s.status) + "eval " + quoteShell(command) + " </dev/null\n" + statusVar + "=$?\ncommand printf '\\036" + string(s.marker[1:]) + "%s\\000%s\\000' \"$" + statusVar + "\" \"$(pwd -P && command printf .)\"\n"
 	if _, err := io.WriteString(s.input, script); err != nil {
 		return "", 0, fmt.Errorf("host shell stopped: %w", err)
 	}
@@ -125,7 +126,7 @@ func (s *commandShell) Run(command string, output func([]byte) error) (string, i
 						if err != nil {
 							return "", 0, errors.New("invalid host shell status")
 						}
-						dir := string(buf[first+1 : second])
+						dir := strings.TrimSuffix(string(buf[first+1:second]), "\n.")
 						if dir == "" {
 							return "", 0, errors.New("host shell did not report its directory")
 						}

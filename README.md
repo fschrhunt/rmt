@@ -5,12 +5,23 @@ Codex use their native local interfaces with their backends on the host.
 
 ```text
 $ rmt mini
-mini ~: ls
-mini ~: cd dev/my-project
-mini ~/dev/my-project: opencode
-mini ~/dev/my-project: exit
+
+fschr@mini ~
+❯ ls
+
+fschr@mini ~/dev/my-project main*
+❯ opencode
+
+fschr@mini ~/dev/my-project main*
+❯ exit
 [rmt is exiting]
 ```
+
+The local prompt is rmt's stock look: a machine and path line followed by `❯`, red after a failed
+command. Git state is queried in the background and displayed on the next prompt when available.
+`style = "inherit"` reads Pure colors and symbols from your local `.zshrc`, loaded
+non-interactively. The layout stays the same, and the machine, directory, and Git status still
+describe the remote host. Missing or unsupported settings use rmt's stock look.
 
 The prompt starts in the host user's home directory. `cd`, shell variables, and the environment
 persist until you disconnect. Pipes and redirection run on the host. Press Ctrl-D or type `exit`
@@ -51,6 +62,13 @@ listen = "0.0.0.0:47473"
 programs = ["opencode", "codex"]
 shell = "/bin/zsh"
 
+[prompt]
+# rmt's stock look
+style = "pure"
+
+# your own zsh prompt's colors and symbols
+# style = "inherit"
+
 [hosts]
 mini = "https://mini.example:47473"
 server = "https://192.168.1.10:47473"
@@ -61,6 +79,7 @@ before first use on a client-only machine; it does not stop a service that is al
 `listen` controls the host service's HTTPS listener and defaults to `0.0.0.0:47473`. Bind to a
 specific network interface if desired. `programs` selects programs; both built-in programs and
 locally registered extension programs are enabled by default.
+`prompt.style` is `pure` (the default) or `inherit`.
 `shell` is an absolute path to a shell, defaulting to the host service's `$SHELL`, or `/bin/sh`
 when that is unset. For zsh and bash, rmt loads `.zshrc` or `.bashrc` for ordinary host commands;
 startup files receive no interactive input and may skip settings that require a terminal. `hosts` maps
@@ -104,7 +123,7 @@ them. The old control socket is recreated by the new service.
 
 ## Terminal behavior
 
-Input editing and history happen locally; Tab completes remote paths. Command output comes from the host. Ordinary commands run in a
+Input editing and history happen locally; Tab completes remote paths, and the prompt uses ANSI colors only on a terminal. Command output comes from the host. Ordinary commands run in a
 persistent non-interactive shell, not a remote terminal: programs cannot read interactive
 stdin, and full-screen applications are not supported. Known programs such as `vim` and `tmux` are
 reported as unsupported, but rmt cannot identify every interactive program. Ctrl-C asks the host
