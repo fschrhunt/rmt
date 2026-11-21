@@ -17,15 +17,10 @@ fschr@mini ~/dev/my-project main*
 [rmt is exiting]
 ```
 
-The local prompt is rmt's stock look: a machine and path line followed by `❯`, which turns red after
-a failed command. It uses Pure's default colors and symbols. Git branch, dirty marker, ahead/behind
-arrows, stash marker and slow-command time are read from the host in the background, so they can lag
-one command behind. rmt renders this itself; select the stock look with `[prompt] style = "pure"`
-(the default). With `[prompt] style = "inherit"` it reads only your zsh prompt's colors and symbols
-from the host and uses them in the same layout. It never imports zsh hooks, the terminal title, a
-vi-mode indicator, or git fetch; the machine name is the host user and short hostname reported by
-the host service.
-If the style query fails, rmt falls back to the stock defaults.
+The local prompt is rmt's stock look: a machine and path line followed by `❯`, red after a failed
+command. Git state and slow-command time come from the host in the background. `style = "inherit"`
+takes your zsh prompt's colors and symbols instead; rmt keeps the layout and segments, and falls
+back to its stock look if the style is unavailable.
 
 The prompt starts in the host user's home directory. `cd`, shell variables, and the environment
 persist until you disconnect. Pipes and redirection run on the host. Press Ctrl-D or type `exit`
@@ -67,7 +62,11 @@ programs = ["opencode", "codex"]
 shell = "/bin/zsh"
 
 [prompt]
+# rmt's stock look
 style = "pure"
+
+# your own zsh prompt's colors and symbols
+# style = "inherit"
 
 [hosts]
 mini = "https://mini.example:47473"
@@ -79,9 +78,7 @@ before first use on a client-only machine; it does not stop a service that is al
 `listen` controls the host service's HTTPS listener and defaults to `0.0.0.0:47473`. Bind to a
 specific network interface if desired. `programs` selects programs; both built-in programs and
 locally registered extension programs are enabled by default.
-`prompt.style` is `pure` (the default) or `inherit`, which takes colors and symbols from the
-host user's zsh prompt settings while keeping rmt's layout and segments. It is read by the client
-when it connects.
+`prompt.style` is `pure` (the default) or `inherit`.
 `shell` is an absolute path to a shell, defaulting to the host service's `$SHELL`, or `/bin/sh`
 when that is unset. For zsh and bash, rmt loads `.zshrc` or `.bashrc` for ordinary host commands;
 startup files receive no interactive input and may skip settings that require a terminal. `hosts` maps
