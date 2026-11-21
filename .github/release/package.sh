@@ -21,7 +21,7 @@ for os in darwin linux; do
         unpack="$work/verify-$target"
         archive="$out/$target.tar.gz"
         mkdir -p "$stage" "$unpack"
-        GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags='-s -w' -o "$stage/rmt" .
+        GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags="-s -w -X main.version=${tag#v}" -o "$stage/rmt" .
         cp LICENSE "$stage/"
         tar -C "$stage" -czf "$archive" rmt LICENSE
         printf '%s\n' rmt LICENSE > "$work/expected"

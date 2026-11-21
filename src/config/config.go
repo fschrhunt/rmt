@@ -17,12 +17,18 @@ import (
 
 var programName = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 
+// Prompt selects the local prompt style.
+type Prompt struct {
+	Style string `toml:"style,omitempty"`
+}
+
 // Config selects host listeners, native programs, and named remote addresses.
 type Config struct {
 	Serve    *bool             `toml:"serve,omitempty"`
 	Programs []string          `toml:"programs,omitempty"`
 	Listen   string            `toml:"listen,omitempty"`
 	Shell    string            `toml:"shell,omitempty"`
+	Prompt   Prompt            `toml:"prompt,omitempty"`
 	Hosts    map[string]string `toml:"hosts,omitempty"`
 }
 
@@ -88,6 +94,9 @@ func Read(path string) (Config, error) {
 	}
 	if c.Shell != "" && !filepath.IsAbs(c.Shell) {
 		return c, fmt.Errorf("invalid config %s: shell must be an absolute path", path)
+	}
+	if c.Prompt.Style != "" && c.Prompt.Style != "pure" && c.Prompt.Style != "inherit" {
+		return c, fmt.Errorf("invalid config %s: prompt style must be pure or inherit", path)
 	}
 	if c.Programs != nil {
 		if len(c.Programs) == 0 {

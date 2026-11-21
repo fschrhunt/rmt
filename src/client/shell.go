@@ -31,6 +31,9 @@ func (e *ConnectionError) Unwrap() error { return e.Err }
 // Shell keeps a local connection to one persistent command shell on the host.
 type Shell struct {
 	host      string
+	home      string
+	user      string
+	hostname  string
 	conn      *websocket.Conn
 	client    *http.Client
 	directory string
@@ -103,7 +106,7 @@ func openShell(host, session string, after uint64) (*Shell, error) {
 		}
 		return nil, errors.New("invalid host shell response")
 	}
-	return &Shell{host: host, conn: conn, client: target.client, directory: event.Directory, session: event.Session, sequence: after, running: event.Running, available: event.Sequence}, nil
+	return &Shell{host: host, home: event.Home, user: event.User, hostname: event.Host, conn: conn, client: target.client, directory: event.Directory, session: event.Session, sequence: after, running: event.Running, available: event.Sequence}, nil
 }
 
 // ResumeShell reconnects a prompt to its existing shell and preserves its state.
@@ -129,6 +132,9 @@ func (s *Shell) recover(host string, output io.Writer) error {
 			continue
 		}
 		s.write.Lock()
+		s.home = next.home
+		s.user = next.user
+		s.hostname = next.hostname
 		s.conn = next.conn
 		s.client = next.client
 		s.directory = next.directory
@@ -143,6 +149,15 @@ func (s *Shell) recover(host string, output io.Writer) error {
 
 // Directory returns the host's current directory for native program launches.
 func (s *Shell) Directory() string { return s.directory }
+
+// Home returns the host user's home directory for prompt abbreviation.
+func (s *Shell) Home() string { return s.home }
+
+// User returns the host user's name for the prompt.
+func (s *Shell) User() string { return s.user }
+
+// Host returns the host's short name for the prompt.
+func (s *Shell) Host() string { return s.hostname }
 
 // Interrupt asks the host to stop its current shell command or launch preparation.
 func (s *Shell) Interrupt() {
@@ -227,11 +242,12 @@ func (s *Shell) Run(command string, output io.Writer) (int, error) {
 func (s *Shell) Close() {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	s.write.Lock()
-	_ = wsjson.Write(ctx, s.conn, shell.Request{Type: "close"})
+	conn, httpClient := s.conn, s.client
+	_ = wsjson.Write(ctx, conn, shell.Request{Type: "close"})
 	s.write.Unlock()
 	cancel()
-	_ = s.conn.Close(websocket.StatusNormalClosure, "")
-	s.client.CloseIdleConnections()
+	_ = conn.Close(websocket.StatusNormalClosure, "")
+	httpClient.CloseIdleConnections()
 }
 
 // Abort closes a lost connection without waiting for a WebSocket close handshake.

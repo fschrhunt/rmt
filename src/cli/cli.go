@@ -42,9 +42,13 @@ func ensureHost() {
 }
 
 // Main connects one host or runs the internal host service.
-func Main() {
+func Main(version string) {
 	log.SetFlags(0)
 	args := os.Args[1:]
+	if len(args) == 1 && args[0] == "--version" {
+		fmt.Fprintln(os.Stdout, "rmt version "+version)
+		return
+	}
 	if len(args) == 1 && args[0] == "--serve" {
 		if err := hosts.Run(); err != nil {
 			log.Fatal("rmt: ", err)

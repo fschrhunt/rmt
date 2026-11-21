@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -99,7 +100,16 @@ func Run() error {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(network.Info{Home: home, Programs: available, Problems: problems, Versions: versions})
 	})
+	user := os.Getenv("USER")
+	if user == "" {
+		user = os.Getenv("LOGNAME")
+	}
+	hostname, _ := os.Hostname()
+	if i := strings.IndexByte(hostname, '.'); i > 0 {
+		hostname = hostname[:i]
+	}
 	commands := shellHandler(home, cfg.Shell)
+	commands.identity(user, hostname)
 	commands.authorized = paired.Authorized
 	commands.enabled = func(name string) bool {
 		return (cfg.Programs == nil && (name == "opencode" || name == "codex" || registry.Has(name))) || cfg.Enabled(name)
@@ -115,6 +125,7 @@ func Run() error {
 		mux.Handle("/info", paired.Auth(control))
 		mux.Handle("/shell", paired.Auth(commands))
 		mux.Handle("/complete", paired.Auth(completionHandler(home)))
+		mux.Handle("/git", paired.Auth(gitHandler()))
 		mux.Handle("/program/", paired.Auth(http.HandlerFunc(commands.serveProgram)))
 		srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 		go func() { failed <- srv.Serve(tls.NewListener(direct, paired.TLS())) }()
