@@ -1,8 +1,10 @@
 package hosts
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"os/exec"
@@ -21,7 +23,7 @@ _style_source "${ZDOTDIR:-$HOME}/.zshrc"
 _style_query() {
   local value=
   if zstyle -s "$1" "$2" value; then
-    print -r -- "RMT_STYLE"$'\t'"$3"$'\t'"$value"
+    builtin printf '%s\t%s\t%s\0' RMT_STYLE "$3" "$value"
   fi
 }
 _style_query ':prompt:pure:user' color user
@@ -36,7 +38,7 @@ _style_query ':prompt:pure:execution_time' color execution
 _style_query ':prompt:pure:prompt:success' color prompt_ok
 _style_query ':prompt:pure:prompt:error' color prompt_error
 _style_symbol() {
-  [[ -n ${(P)1-} ]] && print -r -- "RMT_STYLE"$'\t'"$2"$'\t'"${(P)1}"
+  [[ -n ${(P)1-} ]] && builtin printf '%s\t%s\t%s\0' RMT_STYLE "$2" "${(P)1}"
 }
 _style_symbol PURE_PROMPT_SYMBOL symbol
 _style_symbol PURE_GIT_DOWN_ARROW down_arrow
@@ -71,9 +73,10 @@ func styleHandler(home, shellPath string) http.Handler {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, shellPath, "-f", "-c", styleScript)
+		cmd.Dir = home
 		cmd.Env = append(os.Environ(), "HOME="+home, "TERM=dumb")
-		out, err := cmd.Output()
-		if err != nil && len(out) == 0 {
+		out, err := promptOutput(cmd)
+		if err != nil {
 			_ = json.NewEncoder(w).Encode(shell.Style{})
 			return
 		}
@@ -81,13 +84,27 @@ func styleHandler(home, shellPath string) http.Handler {
 	})
 }
 
-// parseStyle collects tagged lines printed by styleScript.
+// promptOutput limits metadata output and stops waiting for inherited pipes.
+func promptOutput(cmd *exec.Cmd) ([]byte, error) {
+	var out limitedOutput
+	cmd.Stdout = &out
+	cmd.WaitDelay = 100 * time.Millisecond
+	if err := cmd.Run(); err != nil {
+		return nil, err
+	}
+	if out.overflow {
+		return nil, errors.New("prompt metadata output is too large")
+	}
+	return out.data.Bytes(), nil
+}
+
+// parseStyle collects short tagged records printed by styleScript.
 func parseStyle(out []byte) shell.Style {
 	var style shell.Style
 	hostColor := ""
-	for _, line := range strings.Split(string(out), "\n") {
-		parts := strings.SplitN(line, "\t", 3)
-		if len(parts) != 3 || parts[0] != "RMT_STYLE" {
+	for record := range bytes.SplitSeq(out, []byte{0}) {
+		parts := strings.SplitN(string(record), "\t", 3)
+		if len(parts) != 3 || parts[0] != "RMT_STYLE" || len(parts[2]) > 64 || strings.ContainsAny(parts[2], "\t\r\n") {
 			continue
 		}
 		value := strings.TrimSpace(parts[2])

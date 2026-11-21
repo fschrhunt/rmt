@@ -16,7 +16,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/ergochat/readline"
+	"github.com/chzyer/readline"
 	"github.com/fschrhunt/rmt/src/client"
 	"github.com/fschrhunt/rmt/src/config"
 	"github.com/fschrhunt/rmt/src/extensions"
@@ -43,11 +43,22 @@ func promptLabel(name, home, directory string) string {
 	} else if strings.HasPrefix(dir, home+"/") {
 		dir = "~" + strings.TrimPrefix(dir, home)
 	}
-	return name + " " + path.Clean(dir) + ": "
+	return promptText(name+" "+path.Clean(dir)) + ": "
+}
+
+// promptText keeps remote metadata on one line without terminal controls.
+func promptText(text string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Zl, unicode.Zp) {
+			return '�'
+		}
+		return r
+	}, text)
 }
 
 // paint applies one SGR color when the terminal supports it.
 func paint(color, text string, enabled bool) string {
+	text = promptText(text)
 	if !enabled || text == "" {
 		return text
 	}
@@ -141,12 +152,6 @@ func renderPrompt(status int, t theme, color bool) string {
 	return c + t.symbol + colorReset + " "
 }
 
-// isTerminal reports whether rmt may use terminal editing and ANSI colors.
-func isTerminal(file *os.File) bool {
-	info, err := file.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
-}
-
 // reconnect replaces a lost shell without repeating the interrupted command.
 func reconnect(name string, old *client.Shell, output io.Writer) (*client.Shell, error) {
 	dir := old.Directory()
@@ -199,14 +204,11 @@ func escapeCompletion(value string) string {
 }
 
 // remoteCompleter offers host paths as suffixes relative to the word at the cursor.
-type remoteCompleter struct {
-	name      string
-	directory func() string
-}
+type remoteCompleter func(prefix string) ([]string, error)
 
 // Do implements readline.AutoCompleter.
 func (c remoteCompleter) Do(line []rune, pos int) ([][]rune, int) {
-	if pos < 0 || pos > len(line) || pos != len(line) {
+	if pos < 0 || pos > len(line) {
 		return nil, 0
 	}
 	head := line[:pos]
@@ -218,7 +220,7 @@ func (c remoteCompleter) Do(line []rune, pos int) ([][]rune, int) {
 	if strings.ContainsAny(prefix, "\\\"'`$*?[]{};|&<>()") {
 		return nil, 0
 	}
-	matches, err := client.Complete(c.name, c.directory(), prefix)
+	matches, err := c(prefix)
 	if err != nil {
 		return nil, 0
 	}
@@ -243,11 +245,17 @@ type gitCache struct {
 	info       shell.Git
 	ready      bool
 	generation uint64
+	cancel     context.CancelFunc
 }
 
 // refresh starts a bounded host query; stale results from an older directory are ignored.
-func (c *gitCache) refresh(host, directory string) {
+func (c *gitCache) refresh(ctx context.Context, host, directory string) {
 	c.mu.Lock()
+	if c.cancel != nil {
+		c.cancel()
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	c.cancel = cancel
 	if c.directory != directory {
 		c.directory = directory
 		c.info = shell.Git{}
@@ -257,7 +265,8 @@ func (c *gitCache) refresh(host, directory string) {
 	generation := c.generation
 	c.mu.Unlock()
 	go func() {
-		info, err := client.Git(host, directory)
+		defer cancel()
+		info, err := client.Git(ctx, host, directory)
 		if err != nil {
 			return
 		}
@@ -283,7 +292,8 @@ func (c *gitCache) get(directory string) (shell.Git, bool) {
 // prompt edits input locally and sends ordinary commands to the connected shell.
 func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Writer, registry *extensions.Registry) error {
 	t := stockTheme()
-	if cfg, err := config.Load(); err == nil && cfg.Prompt.Style == "inherit" {
+	terminal := os.Getenv("TERM") != "dumb" && readline.IsTerminal(int(os.Stdin.Fd())) && readline.IsTerminal(int(os.Stdout.Fd()))
+	if cfg, err := config.Load(); terminal && err == nil && cfg.Prompt.Style == "inherit" {
 		if style, err := client.Style(name); err == nil {
 			t = themeFromStyle(style)
 		}
@@ -297,6 +307,10 @@ func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Wr
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var remoteMu sync.Mutex
+	var terminalState *readline.State
+	if terminal {
+		terminalState, _ = readline.GetState(int(os.Stdin.Fd()))
+	}
 	terminated := make(chan os.Signal, 1)
 	signal.Notify(terminated, syscall.SIGHUP, syscall.SIGTERM)
 	defer signal.Stop(terminated)
@@ -312,6 +326,9 @@ func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Wr
 			case <-finished:
 			case <-time.After(2 * time.Second):
 			}
+			if terminalState != nil {
+				_ = readline.Restore(int(os.Stdin.Fd()), terminalState)
+			}
 			os.Exit(0)
 		case <-done:
 			return
@@ -320,12 +337,14 @@ func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Wr
 	defer func() { remote.Close() }()
 
 	var editor *readline.Instance
-	if os.Getenv("TERM") != "dumb" && isTerminal(os.Stdin) && isTerminal(os.Stdout) {
-		editor, _ = readline.NewFromConfig(&readline.Config{
-			Prompt:          renderPrompt(0, t, true),
-			AutoComplete:    remoteCompleter{name: name, directory: func() string { return remote.Directory() }},
+	if terminal {
+		editor, _ = readline.NewEx(&readline.Config{
+			Prompt: renderPrompt(0, t, true),
+			AutoComplete: remoteCompleter(func(prefix string) ([]string, error) {
+				return client.Complete(name, remote.Directory(), prefix)
+			}),
 			InterruptPrompt: "^C",
-			EOFPrompt:       "",
+			EOFPrompt:       "\n",
 		})
 		if editor != nil {
 			defer editor.Close()
@@ -333,7 +352,12 @@ func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Wr
 	}
 
 	var git gitCache
-	git.refresh(name, remote.Directory())
+	refreshGit := func() {
+		if editor != nil {
+			git.refresh(ctx, name, remote.Directory())
+		}
+	}
+	refreshGit()
 	status := 0
 	var duration time.Duration
 	for {
@@ -346,7 +370,7 @@ func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Wr
 			fmt.Fprint(output, renderPreprompt(name, remote.User(), remote.Host(), home, dir, info, ready, duration, t, true))
 			fmt.Fprintln(output)
 			editor.SetPrompt(renderPrompt(status, t, true))
-			line, err = editor.ReadLine()
+			line, err = editor.Readline()
 			if errors.Is(err, readline.ErrInterrupt) {
 				continue
 			}
@@ -370,6 +394,7 @@ func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Wr
 		}
 		cmd, err := shell.Parse(line, programs...)
 		if err != nil {
+			status, duration = 1, 0
 			fmt.Fprintln(output, "rmt:", err)
 			continue
 		}
@@ -378,6 +403,7 @@ func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Wr
 			return nil
 		}
 		if cmd.Unsupported != "" {
+			status, duration = 1, 0
 			fmt.Fprintf(output, "rmt: %s is not supported. Supported applications: %s.\n", cmd.Unsupported, supported)
 			continue
 		}
@@ -386,6 +412,7 @@ func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Wr
 			quoted := "'" + strings.ReplaceAll(cmd.Alias, "'", "'\\''") + "'"
 			lookup := "( __rmt_status=$?; builtin alias -- " + quoted + " 2>/dev/null; exit \"$__rmt_status\" )"
 			if _, err = remote.Run(lookup, &aliases); err != nil {
+				status, duration = 1, 0
 				fmt.Fprintln(output, "rmt:", err)
 				next, e := reconnect(name, remote, output)
 				if e != nil {
@@ -394,12 +421,13 @@ func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Wr
 				remoteMu.Lock()
 				remote = next
 				remoteMu.Unlock()
-				git.refresh(name, remote.Directory())
+				refreshGit()
 				continue
 			}
 			resolved := shell.AliasCommand(aliases.String(), cmd.Alias, programs...)
 			cmd.Program, cmd.Unsupported = resolved.Program, resolved.Unsupported
 			if cmd.Unsupported != "" {
+				status, duration = 1, 0
 				fmt.Fprintf(output, "rmt: %s is not supported. Supported applications: %s.\n", cmd.Unsupported, supported)
 				continue
 			}
@@ -421,6 +449,7 @@ func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Wr
 		duration = time.Since(start)
 
 		if err != nil {
+			status = 1
 			fmt.Fprintln(output, "rmt:", err)
 			var lost *client.ConnectionError
 			if cmd.Program == "" && errors.As(err, &lost) {
@@ -431,13 +460,13 @@ func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Wr
 				remoteMu.Lock()
 				remote = next
 				remoteMu.Unlock()
-				git.refresh(name, remote.Directory())
+				refreshGit()
 				continue
 			}
 			if cmd.Program == "" {
 				return err
 			}
 		}
-		git.refresh(name, remote.Directory())
+		refreshGit()
 	}
 }

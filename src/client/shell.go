@@ -242,11 +242,12 @@ func (s *Shell) Run(command string, output io.Writer) (int, error) {
 func (s *Shell) Close() {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	s.write.Lock()
-	_ = wsjson.Write(ctx, s.conn, shell.Request{Type: "close"})
+	conn, httpClient := s.conn, s.client
+	_ = wsjson.Write(ctx, conn, shell.Request{Type: "close"})
 	s.write.Unlock()
 	cancel()
-	_ = s.conn.Close(websocket.StatusNormalClosure, "")
-	s.client.CloseIdleConnections()
+	_ = conn.Close(websocket.StatusNormalClosure, "")
+	httpClient.CloseIdleConnections()
 }
 
 // Abort closes a lost connection without waiting for a WebSocket close handshake.

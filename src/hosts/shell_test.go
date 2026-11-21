@@ -3,6 +3,7 @@ package hosts
 import (
 	"bytes"
 	"context"
+	"io"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -43,6 +44,24 @@ func TestCommandShellLoadsZshConfig(t *testing.T) {
 		if err != nil || status != 0 || output.String() != tc.want || dir != home {
 			t.Fatalf("%s: directory %q, output %q, status %d, error %v", tc.command, dir, output.String(), status, err)
 		}
+	}
+}
+
+// TestCommandShellKeepsTrailingNewlines reports the real path, not a truncated path.
+func TestCommandShellKeepsTrailingNewlines(t *testing.T) {
+	home := t.TempDir()
+	name := "project\n"
+	if err := os.Mkdir(filepath.Join(home, name), 0700); err != nil {
+		t.Fatal(err)
+	}
+	sh, err := newCommandShell(home, "/bin/sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sh.Close()
+	dir, status, err := sh.Run("cd "+quoteShell(name), func(data []byte) error { _, err := io.Discard.Write(data); return err })
+	if err != nil || status != 0 || filepath.Base(dir) != name {
+		t.Fatalf("directory %q, status %d, error %v", dir, status, err)
 	}
 }
 

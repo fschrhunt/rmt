@@ -37,7 +37,7 @@ func gitHandler() http.Handler {
 
 // gitStatus runs bounded git queries so prompt rendering never blocks on a repository.
 func gitStatus(ctx context.Context, dir string) shell.Git {
-	out, err := runGit(ctx, dir, "status", "--porcelain=v2", "--branch", "--untracked-files=normal", "-z")
+	out, err := runGit(ctx, dir, "-c", "core.fsmonitor=false", "status", "--porcelain=v2", "--branch", "--untracked-files=normal", "-z")
 	if err != nil {
 		return shell.Git{}
 	}
@@ -60,7 +60,7 @@ func gitStatus(ctx context.Context, dir string) shell.Git {
 // parseGitStatus extracts the branch, upstream distance and dirty marker from porcelain v2 output.
 func parseGitStatus(out []byte) shell.Git {
 	var info shell.Git
-	for _, record := range bytes.Split(out, []byte{0}) {
+	for record := range bytes.SplitSeq(out, []byte{0}) {
 		switch {
 		case bytes.HasPrefix(record, []byte("# branch.head ")):
 			info.Branch = string(record[len("# branch.head "):])
@@ -68,6 +68,8 @@ func parseGitStatus(out []byte) shell.Git {
 			_, _ = fmt.Sscanf(string(record[len("# branch.ab "):]), "+%d -%d", &info.Ahead, &info.Behind)
 		case len(record) > 0 && record[0] != '#':
 			info.Dirty = true
+			// Headers precede entries; rename entries can contain a second path.
+			return info
 		}
 	}
 	return info
@@ -79,7 +81,7 @@ func gitAction(ctx context.Context, dir string) string {
 	if err != nil {
 		return ""
 	}
-	gitDir := strings.TrimSpace(string(out))
+	gitDir := strings.TrimSuffix(string(out), "\n")
 	if !filepath.IsAbs(gitDir) {
 		gitDir = filepath.Join(dir, gitDir)
 	}
@@ -117,5 +119,5 @@ func gitActionDir(gitDir string) string {
 func runGit(ctx context.Context, dir string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
 	cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0", "GIT_PAGER=cat", "LC_ALL=C")
-	return cmd.Output()
+	return promptOutput(cmd)
 }

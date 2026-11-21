@@ -8,6 +8,8 @@
 - Render rmt's stock local prompt with the host user and short name, abbreviated path, git branch
   and state, slow-command time, and an error-colored symbol. Add an authenticated host git-status
   endpoint and bump the shell protocol to 9.
+- Fix remote Tab completion with an empty prefix, preserve shell paths that end in a newline,
+  and restore terminal settings on shutdown.
 - Add paired loopback client–host validation and opt-in shell startup and command latency
   benchmarks; document native terminal checks and limits of the protocol fixtures.
 - Attest release archives and their checksum manifest with GitHub build provenance, verify the

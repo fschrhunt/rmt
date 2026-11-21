@@ -13,14 +13,14 @@ import (
 )
 
 // Git asks the host for repository state without blocking the local prompt.
-func Git(host, directory string) (shell.Git, error) {
+func Git(ctx context.Context, host, directory string) (shell.Git, error) {
 	target, err := resolveTarget(host)
 	if err != nil {
 		return shell.Git{}, err
 	}
 	defer target.client.CloseIdleConnections()
 	endpoint := target.base + "/git?directory=" + url.QueryEscape(directory)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {

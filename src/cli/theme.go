@@ -65,7 +65,7 @@ func safeSymbol(value, fallback string) string {
 		return fallback
 	}
 	for _, r := range value {
-		if unicode.IsControl(r) {
+		if !unicode.IsPrint(r) {
 			return fallback
 		}
 	}

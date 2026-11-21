@@ -18,9 +18,10 @@ fschr@mini ~/dev/my-project main*
 ```
 
 The local prompt is rmt's stock look: a machine and path line followed by `❯`, red after a failed
-command. Git state and slow-command time come from the host in the background. `style = "inherit"`
-takes your zsh prompt's colors and symbols instead; rmt keeps the layout and segments, and falls
-back to its stock look if the style is unavailable.
+command. Git state is queried in the background and displayed on the next prompt when available.
+`style = "inherit"` takes Pure colors and symbols from the host's zsh configuration, loaded
+non-interactively. rmt keeps the layout and segments, and falls back to its stock look for
+unsupported themes or missing settings.
 
 The prompt starts in the host user's home directory. `cd`, shell variables, and the environment
 persist until you disconnect. Pipes and redirection run on the host. Press Ctrl-D or type `exit`

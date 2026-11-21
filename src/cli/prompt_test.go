@@ -63,12 +63,33 @@ func TestRenderPrompt(t *testing.T) {
 
 // TestRemoteCompleterSkipsShellSyntax avoids remote calls for unfinished syntax.
 func TestRemoteCompleterSkipsShellSyntax(t *testing.T) {
-	caller := remoteCompleter{name: "mini", directory: func() string { return "/home/fschr" }}
+	caller := remoteCompleter(func(prefix string) ([]string, error) {
+		t.Fatalf("unexpected query %q", prefix)
+		return nil, nil
+	})
 	if candidates, length := caller.Do([]rune("echo $HO"), 8); candidates != nil || length != 0 {
 		t.Fatalf("got %v, %d", candidates, length)
 	}
-	if candidates, _ := caller.Do([]rune("echo hi"), 3); candidates != nil {
-		t.Fatal("completion accepted a cursor before the end of the line")
+}
+
+// TestRemoteCompleterAtCursor inserts a suffix without consuming the rest of the line.
+func TestRemoteCompleterAtCursor(t *testing.T) {
+	caller := remoteCompleter(func(prefix string) ([]string, error) {
+		if prefix != "é" {
+			t.Fatalf("prefix = %q", prefix)
+		}
+		return []string{"é file"}, nil
+	})
+	got, offset := caller.Do([]rune("ls é | wc"), 4)
+	if len(got) != 1 || string(got[0]) != `\ file` || offset != 1 {
+		t.Fatalf("candidates = %q, offset = %d", got, offset)
+	}
+}
+
+// TestPromptText keeps host paths from changing terminal state or adding lines.
+func TestPromptText(t *testing.T) {
+	if got := promptLabel("mini", "/home/me", "/home/me/a\nb\x1b"); got != "mini ~/a�b�: " {
+		t.Fatalf("got %q", got)
 	}
 }
 
