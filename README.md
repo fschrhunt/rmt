@@ -5,12 +5,24 @@ Codex use their native local interfaces with their backends on the host.
 
 ```text
 $ rmt mini
-mini ~: ls
-mini ~: cd dev/my-project
-mini ~/dev/my-project: opencode
-mini ~/dev/my-project: exit
+
+fschr@mini ~
+❯ ls
+
+fschr@mini ~/dev/my-project main*
+❯ opencode
+
+fschr@mini ~/dev/my-project main*
+❯ exit
 [rmt is exiting]
 ```
+
+The local prompt follows Pure's stock appearance: a machine and path line followed by `❯`, which
+turns red after a failed command. Git branch, dirty marker, ahead/behind arrows, stash marker and
+slow-command time are read from the host in the background, so they can lag one command behind.
+rmt renders this itself; it does not read your zsh prompt settings, set the terminal title, use a
+vi-mode indicator, or run git fetch. The machine name is the host user and short hostname reported
+by the host service.
 
 The prompt starts in the host user's home directory. `cd`, shell variables, and the environment
 persist until you disconnect. Pipes and redirection run on the host. Press Ctrl-D or type `exit`
@@ -104,7 +116,7 @@ them. The old control socket is recreated by the new service.
 
 ## Terminal behavior
 
-Input editing and history happen locally; Tab completes remote paths. Command output comes from the host. Ordinary commands run in a
+Input editing and history happen locally; Tab completes remote paths, and the prompt uses ANSI colors only on a terminal. Command output comes from the host. Ordinary commands run in a
 persistent non-interactive shell, not a remote terminal: programs cannot read interactive
 stdin, and full-screen applications are not supported. Known programs such as `vim` and `tmux` are
 reported as unsupported, but rmt cannot identify every interactive program. Ctrl-C asks the host

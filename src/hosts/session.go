@@ -20,14 +20,14 @@ import (
 
 // shellSessions owns short-lived resumable shells for authenticated devices.
 type shellSessions struct {
-	home, shellPath string
-	authorized      func(string) bool
-	enabled         func(string) bool
-	problems        map[string]string
-	extensions      *extensions.Registry
-	mu              sync.Mutex
-	sessions        map[string]*shellSession
-	grace           time.Duration
+	home, shellPath, user, hostname string
+	authorized                      func(string) bool
+	enabled                         func(string) bool
+	problems                        map[string]string
+	extensions                      *extensions.Registry
+	mu                              sync.Mutex
+	sessions                        map[string]*shellSession
+	grace                           time.Duration
 }
 
 var errSessionUnavailable = errors.New("shell session expired or unavailable")
@@ -55,6 +55,11 @@ type shellSession struct {
 // shellHandler creates a session manager; callers close it when the host stops.
 func shellHandler(home, shellPath string) *shellSessions {
 	return &shellSessions{home: home, shellPath: shellPath, enabled: (config.Config{}).Enabled, sessions: make(map[string]*shellSession), grace: 15 * time.Second}
+}
+
+// identity sets the user and short hostname reported to connecting prompts.
+func (m *shellSessions) identity(user, hostname string) {
+	m.user, m.hostname = user, hostname
 }
 
 // add stores an event and wakes a connected client; old output is bounded.
@@ -275,7 +280,7 @@ func (m *shellSessions) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	s.mu.Lock()
-	ready := shell.Event{Type: "ready", Version: shell.Version, Session: s.token, Directory: s.directory, Resumed: resumed, Running: s.running, Sequence: s.sequence}
+	ready := shell.Event{Type: "ready", Version: shell.Version, Session: s.token, Directory: s.directory, Home: m.home, User: m.user, Host: m.hostname, Resumed: resumed, Running: s.running, Sequence: s.sequence}
 	s.mu.Unlock()
 	if wsjson.Write(ctx, c, ready) != nil {
 		m.detach(s)
