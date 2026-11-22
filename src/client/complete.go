@@ -2,6 +2,7 @@ package client
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -9,17 +10,20 @@ import (
 )
 
 // Complete lists remote paths relative to the prompt's current directory.
-func Complete(host, directory, prefix string) ([]string, error) {
-	target, err := resolveTarget(host)
-	if err != nil {
-		return nil, err
-	}
-	defer target.client.CloseIdleConnections()
+func (s *Shell) Complete(ctx context.Context, directory, prefix string) ([]string, error) {
+	s.write.Lock()
+	httpClient, base := s.client, s.base
+	s.write.Unlock()
 	data, err := json.Marshal(map[string]string{"directory": directory, "prefix": prefix})
 	if err != nil {
 		return nil, err
 	}
-	response, err := target.client.Post(target.base+"/complete", "application/json", bytes.NewReader(data))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/complete", bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := httpClient.Do(request)
 	if err != nil {
 		return nil, err
 	}

@@ -14,6 +14,10 @@ production client, shell and program handlers. They check:
 - A connection dropped after command output resumes the same shell, preserves state and the
   nonzero exit status, and executes the command once. Closing the client expires that session.
 - Losing the host listener and connection reports an unknown command outcome without replay.
+- Output larger than the replay window arrives intact over a live connection. A deliberate
+  close releases the hosted shell even if it was running a command.
+- Native aliases are routed as part of command submission, while ordinary aliases still run
+  on the host.
 - An interrupt sent by the client reaches a ready child command, returns its trapped exit
   status, and leaves the same shell and its environment usable.
 - OpenCode streams HTTP output through both authenticated bridges, translates the startup
@@ -48,7 +52,7 @@ Each result reports mean elapsed nanoseconds per operation (`ns/op`):
 - `PairedCommandRoundTrip`: submission of `printf probe` through receipt of its completion
   event, including output delivery to a discard writer, on an existing connection. Pairing,
   connection setup, a warmup command and cleanup are outside the timer. This measures command
-  completion latency, not keystroke-to-screen latency.
+  completion latency, not keystroke-to-screen latency. It does not exercise alias routing.
 
 Compare repeated results on the same machine, Go version and load; record those alongside the
 command and output. These are local baseline measurements with no pass/fail latency threshold,
@@ -61,6 +65,11 @@ to the native interface and still need manual checks in a real terminal on macOS
 Ordinary remote shell commands have no PTY or resize protocol. Real device sleep/wake, host
 crashes/restarts, VPN changes, WAN latency and native application recovery remain unvalidated
 by these loopback tests.
+
+For a terminal-close check, open an rmt prompt in a disposable tab and close the tab without
+typing `exit`. Verify the shell connection and attachment are released while the host service
+continues running. Repeat with a native UI on disposable work; check that its backend is still
+available independently. An abrupt client or network failure can instead use the reconnect grace.
 
 ## Manual native-terminal checks
 

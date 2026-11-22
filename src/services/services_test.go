@@ -2,9 +2,55 @@ package services
 
 import (
 	"encoding/xml"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+// TestDisableStopsManagedHost verifies that disabling hosting also stops the current service.
+func TestDisableStopsManagedHost(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PATH", dir)
+	calls := filepath.Join(dir, "calls")
+	t.Setenv("RMT_TEST_CALLS", calls)
+	var manager string
+	var want []string
+	switch runtime.GOOS {
+	case "darwin":
+		manager = "launchctl"
+		want = []string{"disable", "print", "bootout"}
+	case "linux":
+		manager = "systemctl"
+		want = []string{"--user show --property=LoadState --value rmt.service", "--user disable --now rmt.service"}
+	default:
+		t.Skip("unsupported service manager")
+	}
+	fake := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$RMT_TEST_CALLS\"\n"
+	if err := os.WriteFile(filepath.Join(dir, manager), []byte(fake), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := Disable(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(calls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(got) != len(want) {
+		t.Fatalf("service manager calls = %q", got)
+	}
+	for i := range want {
+		if manager == "launchctl" {
+			got[i], _, _ = strings.Cut(got[i], " ")
+		}
+		if got[i] != want[i] {
+			t.Fatalf("call %d = %q, want %q", i+1, got[i], want[i])
+		}
+	}
+}
 
 // TestServiceDefinitionsPreservePaths checks escaping and custom configuration paths.
 func TestServiceDefinitionsPreservePaths(t *testing.T) {

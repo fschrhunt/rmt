@@ -17,6 +17,42 @@ import (
 	"github.com/fschrhunt/rmt/src/shell"
 )
 
+// TestShellResumeReportsEvictedOutput checks the gap and replay order after eviction.
+func TestShellResumeReportsEvictedOutput(t *testing.T) {
+	manager := shellHandler(t.TempDir(), "/bin/sh")
+	defer manager.Close()
+	s, _, err := manager.acquire("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.detach(s)
+	for i := range 3 {
+		data := make([]byte, 512<<10)
+		data[0] = byte(i)
+		s.add(shell.Event{Type: "output", Data: data})
+	}
+	server := httptest.NewServer(manager)
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	endpoint := "ws" + strings.TrimPrefix(server.URL, "http") + "?session=" + s.token + "&after=0"
+	c, _, err := websocket.Dial(ctx, endpoint, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.CloseNow()
+	c.SetReadLimit(1 << 20)
+	for _, want := range []struct {
+		kind string
+		seq  uint64
+	}{{"ready", 3}, {"gap", 1}, {"output", 2}, {"output", 3}} {
+		var got shell.Event
+		if err := wsjson.Read(ctx, c, &got); err != nil || got.Type != want.kind || got.Sequence != want.seq {
+			t.Fatalf("event = %s/%d, want %s/%d (read: %v)", got.Type, got.Sequence, want.kind, want.seq, err)
+		}
+	}
+}
+
 // TestShellReconnectPreservesStateAndRunningCommand checks a dropped connection without replay.
 func TestShellReconnectPreservesStateAndRunningCommand(t *testing.T) {
 	manager := shellHandler(t.TempDir(), "")

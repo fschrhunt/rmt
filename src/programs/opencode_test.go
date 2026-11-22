@@ -66,7 +66,7 @@ func TestOpenCodeClientNeedsNoLocalProject(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("PATH", bin)
 	t.Setenv("RMT_TEST_ARGS", output)
-	if err := OpenCodeAt(&url.URL{Scheme: "http", Host: "127.0.0.1:47471"}, nil, "/other/project", nil); err != nil {
+	if err := OpenCodeAt(t.Context(), &url.URL{Scheme: "http", Host: "127.0.0.1:47471"}, nil, "/other/project", nil); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(output)

@@ -140,10 +140,10 @@ func Launch(ctx context.Context, host, programName, line string, remote *Shell, 
 		if err != nil {
 			return err
 		}
-		return programs.OpenCodeAt(endpoint, transport, dir, extra)
+		return programs.OpenCodeAt(ctx, endpoint, transport, dir, extra)
 	}
 	if programName == "codex" {
-		return programs.CodexDirect(*target.profile, base+"/proxy", dir, extra)
+		return programs.CodexDirect(ctx, *target.profile, base+"/proxy", dir, extra)
 	}
 	return programs.Custom(ctx, registry, *target.profile, base+"/proxy", programName, dir, extra)
 }

@@ -1,12 +1,14 @@
 package hosts
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -45,6 +47,9 @@ type shellSession struct {
 	events                    []shell.Event
 	size                      int
 	sequence                  uint64
+	delivered                 uint64
+	ctx                       context.Context
+	cancel                    context.CancelFunc
 	proxying                  int
 	running, attached, closed bool
 	orphaned                  bool
@@ -69,8 +74,20 @@ func (s *shellSession) add(event shell.Event) {
 	s.addLocked(event)
 }
 
-// addLocked appends a sequenced event while the session lock is held.
+// addLocked keeps bounded replay history, waiting rather than evicting live unsent output.
 func (s *shellSession) addLocked(event shell.Event) {
+	for !s.closed && len(s.events) > 0 && (s.size+len(event.Data) > 1<<20 || len(s.events) >= 2048) {
+		if s.attached && s.events[0].Sequence > s.delivered {
+			changed := s.changed
+			s.mu.Unlock()
+			<-changed
+			s.mu.Lock()
+			continue
+		}
+		s.size -= len(s.events[0].Data)
+		s.events[0] = shell.Event{}
+		s.events = s.events[1:]
+	}
 	if s.closed {
 		return
 	}
@@ -78,10 +95,11 @@ func (s *shellSession) addLocked(event shell.Event) {
 	event.Sequence = s.sequence
 	s.events = append(s.events, event)
 	s.size += len(event.Data)
-	for (s.size > 1<<20 || len(s.events) > 2048) && len(s.events) > 1 {
-		s.size -= len(s.events[0].Data)
-		s.events = s.events[1:]
-	}
+	s.notifyLocked()
+}
+
+// notifyLocked wakes the writer and any producer waiting on connection progress.
+func (s *shellSession) notifyLocked() {
 	close(s.changed)
 	s.changed = make(chan struct{})
 }
@@ -101,6 +119,7 @@ func (m *shellSessions) stop(s *shellSession) {
 		return
 	}
 	s.closed = true
+	s.cancel()
 	backend := s.program
 	s.program = nil
 	if s.timer != nil {
@@ -140,6 +159,7 @@ func (m *shellSessions) stopDetached(s *shellSession, generation uint64) {
 	}
 	delete(m.sessions, s.token)
 	s.closed = true
+	s.cancel()
 	backend := s.program
 	s.program = nil
 	if s.timer != nil {
@@ -154,19 +174,6 @@ func (m *shellSessions) stopDetached(s *shellSession, generation uint64) {
 		}
 	}
 	s.sh.Close()
-}
-
-// closeClient leaves an already running command alone until it finishes.
-func (m *shellSessions) closeClient(s *shellSession) {
-	s.mu.Lock()
-	if s.running {
-		s.orphaned = true
-		s.attached = false
-		s.mu.Unlock()
-		return
-	}
-	s.mu.Unlock()
-	m.stop(s)
 }
 
 // Close releases every hosted shell when the host service shuts down.
@@ -197,6 +204,7 @@ func (m *shellSessions) acquire(token, owner string) (*shellSession, bool, error
 			return nil, false, errors.New("shell session is already connected")
 		}
 		s.attached = true
+		s.delivered = 0
 		if s.timer != nil {
 			s.timer.Stop()
 			s.timer = nil
@@ -215,7 +223,8 @@ func (m *shellSessions) acquire(token, owner string) (*shellSession, bool, error
 		return nil, false, err
 	}
 	token = hex.EncodeToString(secret[:])
-	s := &shellSession{token: token, owner: owner, directory: m.home, sh: sh, changed: make(chan struct{}), attached: true}
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &shellSession{token: token, owner: owner, directory: m.home, sh: sh, changed: make(chan struct{}), ctx: ctx, cancel: cancel, attached: true}
 	m.sessions[token] = s
 	return s, false, nil
 }
@@ -228,6 +237,7 @@ func (m *shellSessions) detach(s *shellSession) {
 		return
 	}
 	s.attached = false
+	s.notifyLocked()
 	s.generation++
 	generation := s.generation
 	s.timer = time.AfterFunc(m.grace, func() { m.stopDetached(s, generation) })
@@ -279,6 +289,7 @@ func (m *shellSessions) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	c.SetReadLimit(128 << 10)
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
+	defer context.AfterFunc(s.ctx, cancel)()
 	s.mu.Lock()
 	ready := shell.Event{Type: "ready", Version: shell.Version, Session: s.token, Directory: s.directory, Home: m.home, User: m.user, Host: m.hostname, Resumed: resumed, Running: s.running, Sequence: s.sequence}
 	s.mu.Unlock()
@@ -296,7 +307,7 @@ func (m *shellSessions) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				s.mu.Unlock()
 				return
 			}
-			if len(s.events) > 0 && cursor+1 < s.events[0].Sequence {
+			if len(s.events) > 0 && cursor < s.events[0].Sequence-1 {
 				cursor = s.events[0].Sequence - 1
 				s.mu.Unlock()
 				if wsjson.Write(ctx, c, shell.Event{Type: "gap", Sequence: cursor}) != nil {
@@ -306,22 +317,26 @@ func (m *shellSessions) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			var next shell.Event
-			found := false
-			for _, event := range s.events {
-				if event.Sequence > cursor {
-					next = event
-					found = true
-					break
-				}
+			if len(s.events) > 0 && cursor < s.sequence {
+				next = s.events[cursor+1-s.events[0].Sequence]
 			}
 			changed := s.changed
 			s.mu.Unlock()
-			if found {
-				if wsjson.Write(ctx, c, next) != nil {
+			if next.Sequence != 0 {
+				writeCtx, stop := context.WithTimeout(ctx, 15*time.Second)
+				err := wsjson.Write(writeCtx, c, next)
+				stop()
+				if err != nil {
 					cancel()
 					return
 				}
 				cursor = next.Sequence
+				s.mu.Lock()
+				if !s.closed {
+					s.delivered = cursor
+					s.notifyLocked()
+				}
+				s.mu.Unlock()
 				continue
 			}
 			select {
@@ -336,14 +351,18 @@ func (m *shellSessions) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		cancel()
 		<-writerDone
 		if graceful {
-			m.closeClient(s)
+			m.stop(s)
 		} else {
 			m.detach(s)
 		}
 	}()
 	for {
 		var req shell.Request
-		if wsjson.Read(ctx, c, &req) != nil {
+		if err := wsjson.Read(ctx, c, &req); err != nil {
+			switch websocket.CloseStatus(err) {
+			case websocket.StatusNormalClosure, websocket.StatusGoingAway:
+				graceful = true
+			}
 			return
 		}
 		switch req.Type {
@@ -355,25 +374,20 @@ func (m *shellSessions) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			s.running = true
 			s.mu.Unlock()
-			go func(command string) {
-				dir, status, err := s.sh.Run(command, func(data []byte) error {
-					s.add(shell.Event{Type: "output", Data: append([]byte(nil), data...)})
-					return nil
-				})
+			go func(req shell.Request) {
+				event, dir := m.run(s, req)
 				s.mu.Lock()
-				s.running = false
-				if err != nil {
-					s.addLocked(shell.Event{Type: "error", Error: err.Error()})
-				} else {
+				if dir != "" {
 					s.directory = dir
-					s.addLocked(shell.Event{Type: "done", Directory: dir, Status: status})
 				}
+				s.addLocked(event)
+				s.running = false
 				orphaned := s.orphaned
 				s.mu.Unlock()
 				if orphaned {
 					m.stop(s)
 				}
-			}(req.Command)
+			}(req)
 		case "interrupt":
 			s.mu.Lock()
 			if s.running || s.starting {
@@ -387,4 +401,32 @@ func (m *shellSessions) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+// run resolves a requested alias locally on the host and runs only ordinary commands in the shell.
+func (m *shellSessions) run(s *shellSession, req shell.Request) (shell.Event, string) {
+	if len(req.Alias) > 0 && len(req.Alias) <= 256 && !strings.HasPrefix(req.Alias, "-") {
+		var aliases bytes.Buffer
+		lookup := "( __rmt_status=$?; \\alias " + quoteShell(req.Alias) + " 2>/dev/null; exit \"$__rmt_status\" )"
+		_, _, err := s.sh.Run(lookup, func(data []byte) error {
+			if remaining := 64<<10 - aliases.Len(); remaining > 0 {
+				_, _ = aliases.Write(data[:min(len(data), remaining)])
+			}
+			return nil
+		})
+		if err != nil {
+			return shell.Event{Type: "error", Error: err.Error()}, ""
+		}
+		if cmd := shell.AliasCommand(aliases.String(), req.Alias, req.Programs...); cmd.Program != "" || cmd.Unsupported != "" {
+			return shell.Event{Type: "program", Program: cmd.Program, Error: cmd.Unsupported}, ""
+		}
+	}
+	dir, status, err := s.sh.Run(req.Command, func(data []byte) error {
+		s.add(shell.Event{Type: "output", Data: append([]byte(nil), data...)})
+		return nil
+	})
+	if err != nil {
+		return shell.Event{Type: "error", Error: err.Error()}, ""
+	}
+	return shell.Event{Type: "done", Directory: dir, Status: status}, dir
 }
