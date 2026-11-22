@@ -17,7 +17,7 @@ import (
 	"github.com/fschrhunt/rmt/src/services"
 )
 
-// Main connects one host or runs the internal host service.
+// Main connects one host, runs the internal host service, or prints a pairing code for SSH pairing.
 func Main(version string) {
 	log.SetFlags(0)
 	args := os.Args[1:]
@@ -33,6 +33,12 @@ func Main(version string) {
 	}
 	if len(args) == 1 && args[0] == "--serve" {
 		if err := hosts.Run(version); err != nil {
+			log.Fatal("rmt: ", err)
+		}
+		return
+	}
+	if len(args) == 1 && args[0] == "--pair-code" {
+		if err := printPairCode(os.Stdout); err != nil {
 			log.Fatal("rmt: ", err)
 		}
 		return

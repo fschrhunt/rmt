@@ -110,7 +110,13 @@ non-secret native configuration paths from when it was first enabled. Existing s
 not rewritten. Environment-only credentials are not copied into the service file; use the program's
 own host-side authentication or configure the service environment separately.
 
-The first `rmt <host>` connection prompts for pairing. On the host, open the private
+The first `rmt <host>` connection pairs automatically when `ssh <host>` reaches the same machine:
+rmt runs `rmt --pair-code` there over SSH, receives a one-time code and the host's identity through
+SSH's authenticated channel, and pairs over HTTPS pinned to that identity. SSH may prompt as usual;
+the host needs rmt in `PATH` or in `~/.local/bin`, `/opt/homebrew/bin`, or `/usr/local/bin`. If
+the SSH alias reaches a different machine than the rmt address, pairing fails rather than trusting it.
+
+When SSH is unavailable, rmt prompts for manual pairing. On the host, open the private
 `~/.rmt/pairing.json` file, compare its `verify` value with
 the one shown locally, and enter its one-time code. Confirm the verification value through a trusted
 channel. The code expires and disappears after successful pairing. Subsequent connections use a
