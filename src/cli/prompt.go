@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -305,10 +304,17 @@ func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Wr
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var remoteMu sync.Mutex
+	var launchMu sync.Mutex
 	var terminalState *readline.State
 	if terminal {
 		terminalState, _ = readline.GetState(int(os.Stdin.Fd()))
 	}
+	restoreTerminal := func() {
+		if terminalState != nil {
+			_ = readline.Restore(int(os.Stdin.Fd()), terminalState)
+		}
+	}
+	defer restoreTerminal()
 	terminated := make(chan os.Signal, 1)
 	signal.Notify(terminated, syscall.SIGHUP, syscall.SIGTERM)
 	defer signal.Stop(terminated)
@@ -318,28 +324,39 @@ func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Wr
 		select {
 		case <-terminated:
 			cancel()
-			finished := make(chan struct{})
-			go func() { remoteMu.Lock(); remote.Close(); remoteMu.Unlock(); close(finished) }()
-			select {
-			case <-finished:
-			case <-time.After(2 * time.Second):
+			closeDone, launchDone := make(chan struct{}), make(chan struct{})
+			go func() { remoteMu.Lock(); remote.Close(); remoteMu.Unlock(); close(closeDone) }()
+			go func() { launchMu.Lock(); launchMu.Unlock(); close(launchDone) }()
+			closed, launched := closeDone, launchDone
+			timeout := time.After(2 * time.Second)
+			for closed != nil || launched != nil {
+				select {
+				case <-closed:
+					closed = nil
+				case <-launched:
+					launched = nil
+				case <-timeout:
+					closed, launched = nil, nil
+				}
 			}
-			if terminalState != nil {
-				_ = readline.Restore(int(os.Stdin.Fd()), terminalState)
-			}
+			restoreTerminal()
 			os.Exit(0)
 		case <-done:
 			return
 		}
 	}()
-	defer func() { remote.Close() }()
+	defer func() {
+		cancel()
+		remote.Close()
+	}()
 
 	var editor *readline.Instance
+	var completion completionCache
 	if terminal {
 		editor, _ = readline.NewEx(&readline.Config{
 			Prompt: renderPrompt(0, t, true),
 			AutoComplete: remoteCompleter(func(prefix string) ([]string, error) {
-				return client.Complete(name, remote.Directory(), prefix)
+				return completion.lookup(ctx, remote, remote.Directory(), prefix), nil
 			}),
 			InterruptPrompt: "^C",
 			EOFPrompt:       "\n",
@@ -390,6 +407,7 @@ func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Wr
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
+		completion.clear()
 		cmd, err := shell.Parse(line, programs...)
 		if err != nil {
 			status, duration = 1, 0
@@ -405,48 +423,43 @@ func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Wr
 			fmt.Fprintf(output, "rmt: %s is not supported. Supported applications: %s.\n", cmd.Unsupported, supported)
 			continue
 		}
-		if cmd.Alias != "" {
-			var aliases bytes.Buffer
-			quoted := "'" + strings.ReplaceAll(cmd.Alias, "'", "'\\''") + "'"
-			lookup := "( __rmt_status=$?; builtin alias -- " + quoted + " 2>/dev/null; exit \"$__rmt_status\" )"
-			if _, err = remote.Run(lookup, &aliases); err != nil {
-				status, duration = 1, 0
-				fmt.Fprintln(output, "rmt:", err)
-				next, e := reconnect(name, remote, output)
-				if e != nil {
-					return e
-				}
-				remoteMu.Lock()
-				remote = next
-				remoteMu.Unlock()
-				refreshGit()
-				continue
+		start := time.Now()
+		if cmd.Program == "" {
+			var aliasPrograms []string
+			if cmd.Alias != "" {
+				aliasPrograms = programs
 			}
-			resolved := shell.AliasCommand(aliases.String(), cmd.Alias, programs...)
-			cmd.Program, cmd.Unsupported = resolved.Program, resolved.Unsupported
-			if cmd.Unsupported != "" {
-				status, duration = 1, 0
-				fmt.Fprintf(output, "rmt: %s is not supported. Supported applications: %s.\n", cmd.Unsupported, supported)
-				continue
+			status, err = remote.RunPrompt(line, cmd.Alias, aliasPrograms, output)
+			var route *client.ProgramRoute
+			if errors.As(err, &route) {
+				if route.Unsupported != "" {
+					status, duration = 1, 0
+					fmt.Fprintf(output, "rmt: %s is not supported. Supported applications: %s.\n", route.Unsupported, supported)
+					continue
+				}
+				cmd.Program = route.Program
 			}
 		}
-
-		start := time.Now()
 		if cmd.Program != "" {
 			signals := make(chan os.Signal, 1)
 			signal.Notify(signals, os.Interrupt)
-			err = client.Launch(ctx, name, cmd.Program, line, remote, registry)
+			launchMu.Lock()
+			if ctx.Err() == nil {
+				err = client.Launch(ctx, name, cmd.Program, line, remote, registry)
+			}
+			launchMu.Unlock()
 			signal.Stop(signals)
 			status = 0
 			if err != nil {
 				status = 1
 			}
-		} else {
-			status, err = remote.Run(line, output)
 		}
 		duration = time.Since(start)
 
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
 			status = 1
 			fmt.Fprintln(output, "rmt:", err)
 			var lost *client.ConnectionError
@@ -456,6 +469,11 @@ func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Wr
 					return e
 				}
 				remoteMu.Lock()
+				if ctx.Err() != nil {
+					remoteMu.Unlock()
+					next.Close()
+					return nil
+				}
 				remote = next
 				remoteMu.Unlock()
 				refreshGit()

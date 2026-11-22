@@ -1,16 +1,14 @@
-// Package services installs the host with the user service manager.
+// Package services manages the rmt host through the user service manager.
 package services
 
 import (
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
 )
 
 // nativePaths retains only non-secret paths needed to locate native program settings.
@@ -24,20 +22,11 @@ func nativePaths() map[string]string {
 	return result
 }
 
-// Install installs and starts a user service without replacing an existing one.
-// address is the host's control address, used to avoid starting a duplicate.
-func Install(address string) error {
-	conn, err := net.DialTimeout("tcp", address, 300*time.Millisecond)
-	if err == nil {
-		conn.Close()
-		return nil
-	}
+// Enable installs and starts the host service without replacing an existing definition.
+func Enable() error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
-	}
-	if rel, err := filepath.Rel(os.TempDir(), home); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return nil
 	}
 	binary, err := os.Executable()
 	if err != nil {
@@ -48,7 +37,7 @@ func Install(address string) error {
 		return err
 	}
 	if rel, err := filepath.Rel(os.TempDir(), binary); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return nil
+		return errors.New("install rmt in a permanent directory before enabling the host service")
 	}
 	// Prefer a stable installed command symlink over a versioned package-manager target.
 	if installed, err := exec.LookPath("rmt"); err == nil {
@@ -91,7 +80,7 @@ func Install(address string) error {
 		servicePath = filepath.Join(root, "systemd", "user", "rmt.service")
 		content = systemdUnit(binary, os.Getenv("PATH"), nativePaths())
 	default:
-		return fmt.Errorf("automatic service installation is not supported on %s", runtime.GOOS)
+		return fmt.Errorf("host service installation is not supported on %s", runtime.GOOS)
 	}
 	if err := os.MkdirAll(filepath.Dir(servicePath), 0700); err != nil {
 		return err
@@ -109,19 +98,12 @@ func Install(address string) error {
 	} else if !errors.Is(err, os.ErrExist) {
 		return err
 	}
-	run := func(name string, args ...string) error {
-		output, err := exec.Command(name, args...).CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("%s: %w: %s", name, err, strings.TrimSpace(string(output)))
-		}
-		return nil
-	}
 	if runtime.GOOS == "darwin" {
-		label := fmt.Sprintf("gui/%d/com.rmt.host", os.Getuid())
-		if exec.Command("launchctl", "print", label).Run() == nil {
-			return nil
+		domain := fmt.Sprintf("gui/%d", os.Getuid())
+		label := domain + "/com.rmt.host"
+		if err = run("launchctl", "enable", label); err == nil && exec.Command("launchctl", "print", label).Run() != nil {
+			err = run("launchctl", "bootstrap", domain, servicePath)
 		}
-		err = run("launchctl", "bootstrap", fmt.Sprintf("gui/%d", os.Getuid()), servicePath)
 	} else {
 		if err = run("systemctl", "--user", "daemon-reload"); err == nil {
 			err = run("systemctl", "--user", "enable", "--now", "rmt.service")
@@ -129,6 +111,38 @@ func Install(address string) error {
 	}
 	if err != nil {
 		return fmt.Errorf("could not start the host service at %s: %w", servicePath, err)
+	}
+	return nil
+}
+
+// Disable stops the host and prevents it from starting at login, preserving its files and pairings.
+func Disable() error {
+	switch runtime.GOOS {
+	case "darwin":
+		domain := fmt.Sprintf("gui/%d", os.Getuid())
+		label := domain + "/com.rmt.host"
+		if err := run("launchctl", "disable", label); err != nil {
+			return err
+		}
+		if exec.Command("launchctl", "print", label).Run() == nil {
+			return run("launchctl", "bootout", label)
+		}
+		return nil
+	case "linux":
+		state, _ := exec.Command("systemctl", "--user", "show", "--property=LoadState", "--value", "rmt.service").Output()
+		if strings.TrimSpace(string(state)) == "not-found" {
+			return nil
+		}
+		return run("systemctl", "--user", "disable", "--now", "rmt.service")
+	default:
+		return fmt.Errorf("host service management is not supported on %s", runtime.GOOS)
+	}
+}
+
+// run reports service manager failures with their diagnostic output.
+func run(name string, args ...string) error {
+	if output, err := exec.Command(name, args...).CombinedOutput(); err != nil {
+		return fmt.Errorf("%s: %w: %s", name, err, strings.TrimSpace(string(output)))
 	}
 	return nil
 }
