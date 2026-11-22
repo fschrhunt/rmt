@@ -9,6 +9,30 @@ import (
 	"testing"
 )
 
+// TestFirstUseLeavesExistingHostAlone verifies that connecting cannot re-register a service.
+func TestFirstUseLeavesExistingHostAlone(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("PATH", filepath.Join(home, "no-service-manager"))
+	file, err := definitionPath(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(file), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte("existing service"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnableOnFirstUse(); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(file); err != nil || string(data) != "existing service" {
+		t.Fatalf("existing service changed: %q, %v", data, err)
+	}
+}
+
 // TestDisableStopsManagedHost verifies that disabling hosting also stops the current service.
 func TestDisableStopsManagedHost(t *testing.T) {
 	dir := t.TempDir()

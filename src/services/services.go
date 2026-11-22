@@ -22,11 +22,47 @@ func nativePaths() map[string]string {
 	return result
 }
 
+// EnableOnFirstUse sets up hosting only when there is no existing service definition.
+func EnableOnFirstUse() error { return enable(true) }
+
 // Enable installs and starts the host service without replacing an existing definition.
-func Enable() error {
+func Enable() error { return enable(false) }
+
+// definitionPath locates the service file for the current user.
+func definitionPath(home string) (string, error) {
+	switch runtime.GOOS {
+	case "darwin":
+		return filepath.Join(home, "Library", "LaunchAgents", "com.rmt.host.plist"), nil
+	case "linux":
+		root := os.Getenv("XDG_CONFIG_HOME")
+		if root == "" {
+			root = filepath.Join(home, ".config")
+		}
+		if !filepath.IsAbs(root) {
+			return "", errors.New("XDG_CONFIG_HOME must be an absolute path")
+		}
+		return filepath.Join(root, "systemd", "user", "rmt.service"), nil
+	default:
+		return "", fmt.Errorf("host service installation is not supported on %s", runtime.GOOS)
+	}
+}
+
+// enable leaves existing registrations entirely alone on the automatic path.
+func enable(firstUse bool) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
+	}
+	servicePath, err := definitionPath(home)
+	if err != nil {
+		return err
+	}
+	if firstUse {
+		if _, err := os.Lstat(servicePath); err == nil {
+			return nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
 	}
 	binary, err := os.Executable()
 	if err != nil {
@@ -47,10 +83,9 @@ func Enable() error {
 			}
 		}
 	}
-	var servicePath, content string
+	var content string
 	switch runtime.GOOS {
 	case "darwin":
-		servicePath = filepath.Join(home, "Library", "LaunchAgents", "com.rmt.host.plist")
 		logDir := filepath.Join(home, "Library", "Logs", "rmt")
 		if err := os.MkdirAll(logDir, 0700); err != nil {
 			return err
@@ -70,17 +105,7 @@ func Enable() error {
 		}
 		content = launchAgent(binary, os.Getenv("PATH"), nativePaths(), logPath)
 	case "linux":
-		root := os.Getenv("XDG_CONFIG_HOME")
-		if root == "" {
-			root = filepath.Join(home, ".config")
-		}
-		if !filepath.IsAbs(root) {
-			return errors.New("XDG_CONFIG_HOME must be an absolute path")
-		}
-		servicePath = filepath.Join(root, "systemd", "user", "rmt.service")
 		content = systemdUnit(binary, os.Getenv("PATH"), nativePaths())
-	default:
-		return fmt.Errorf("host service installation is not supported on %s", runtime.GOOS)
 	}
 	if err := os.MkdirAll(filepath.Dir(servicePath), 0700); err != nil {
 		return err
@@ -97,6 +122,8 @@ func Enable() error {
 		}
 	} else if !errors.Is(err, os.ErrExist) {
 		return err
+	} else if firstUse {
+		return nil
 	}
 	if runtime.GOOS == "darwin" {
 		domain := fmt.Sprintf("gui/%d", os.Getuid())

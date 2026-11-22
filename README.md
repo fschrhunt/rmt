@@ -88,14 +88,16 @@ keeping the same address and paired identity.
 
 ## Host service and pairing
 
-Install rmt and the desired programs on each machine. On a machine you want to connect **to**, run
-`rmt host enable` to install and start its background service (macOS or Linux with systemd).
-macOS may notify you when you enable hosting. Running `rmt <host>` only connects; it never enables
-local hosting. Existing host services keep running after an upgrade. The old `serve` setting is
-accepted but no longer used.
+Install rmt and the desired programs on each machine. The first `rmt <host>` sets up the
+background service **on the machine where you run it** (macOS or Linux with systemd). This
+doesn't install or start anything on the destination. To make a machine reachable before its
+first outbound connection, run `rmt host enable` there. macOS may notify you when the service
+is registered. Later connections leave existing services alone.
 
 Use `rmt host disable` to stop the background service and prevent it from starting again at login.
-This disconnects clients but keeps your settings and pairings. Run `rmt host enable` to resume hosting.
+This disconnects inbound clients but keeps your settings and pairings. Future connections won't
+re-enable it. Run `rmt host enable` to resume hosting or retry a failed setup. An existing
+`serve = false` setting still opts out of automatic setup, but doesn't block an explicit enable.
 
 Install the binary somewhere permanent before enabling hosting. The service uses the `PATH` and
 non-secret native configuration paths from when it was first enabled. Existing service files are
