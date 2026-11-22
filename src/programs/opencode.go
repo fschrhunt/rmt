@@ -12,7 +12,6 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"time"
 )
@@ -74,7 +73,7 @@ func OpenCodeAt(ctx context.Context, target *url.URL, transport http.RoundTrippe
 	go func() { _ = srv.Serve(l) }()
 	defer srv.Close()
 	args := append([]string{"--server", "http://" + l.Addr().String(), localDir}, extra...)
-	c := exec.CommandContext(ctx, "opencode", args...)
+	c := terminalCommand(ctx, "opencode", args...)
 	c.Env = append(os.Environ(), "OPENCODE_PASSWORD="+password)
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout

@@ -157,16 +157,18 @@ func TestClientRoutesAliasOnSubmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer remote.Close()
-	if status, err := remote.Run("alias oc='opencode --help'; alias say='printf hello'", io.Discard); status != 0 || err != nil {
+	if status, err := remote.Run("alias oc='opencode --help'; alias say='printf hello'; alias custom='clienttool --help'", io.Discard); status != 0 || err != nil {
 		t.Fatalf("define aliases: %d, %v", status, err)
 	}
 	var output bytes.Buffer
-	_, err = remote.RunPrompt("oc", "oc", &output)
-	var route *client.ProgramRoute
-	if !errors.As(err, &route) || route.Program != "opencode" || output.Len() != 0 {
-		t.Fatalf("route = %v, output = %q", err, &output)
+	for alias, program := range map[string]string{"oc": "opencode", "custom": "clienttool"} {
+		_, err = remote.RunPrompt(alias, alias, []string{"clienttool"}, &output)
+		var route *client.ProgramRoute
+		if !errors.As(err, &route) || route.Program != program || output.Len() != 0 {
+			t.Fatalf("%s: route = %v, output = %q", alias, err, &output)
+		}
 	}
-	if status, err := remote.RunPrompt("say", "say", &output); status != 0 || err != nil || output.String() != "hello" {
+	if status, err := remote.RunPrompt("say", "say", nil, &output); status != 0 || err != nil || output.String() != "hello" {
 		t.Fatalf("ordinary alias: %d, %v, %q", status, err, &output)
 	}
 }
@@ -194,11 +196,20 @@ func TestClientCloseReleasesRunningSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer remote.Close()
+	h.manager.mu.Lock()
+	var session *shellSession
+	for _, session = range h.manager.sessions {
+		break
+	}
+	h.manager.mu.Unlock()
+	if session == nil {
+		t.Fatal("missing host session")
+	}
 	output := &startedOutput{onStarted: func() error {
 		remote.Close()
 		return nil
 	}}
-	runClientCommand(t, remote, "printf started; /bin/sleep 1; printf done", output)
+	runClientCommand(t, remote, "printf started; /bin/sleep 1; printf done > finished", output)
 	select {
 	case <-h.detached:
 	case <-time.After(3 * time.Second):
@@ -209,6 +220,14 @@ func TestClientCloseReleasesRunningSession(t *testing.T) {
 			recovered.Close()
 		}
 		t.Fatalf("closed session could still be resumed: %v", err)
+	}
+	select {
+	case <-session.sh.done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("host shell did not exit after its command finished")
+	}
+	if data, err := os.ReadFile(filepath.Join(h.home, "finished")); err != nil || string(data) != "done" {
+		t.Fatalf("running command did not finish: %q, %v", data, err)
 	}
 }
 

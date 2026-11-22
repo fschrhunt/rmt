@@ -307,7 +307,7 @@ func (m *shellSessions) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				s.mu.Unlock()
 				return
 			}
-			if len(s.events) > 0 && cursor+1 < s.events[0].Sequence {
+			if len(s.events) > 0 && cursor < s.events[0].Sequence-1 {
 				cursor = s.events[0].Sequence - 1
 				s.mu.Unlock()
 				if wsjson.Write(ctx, c, shell.Event{Type: "gap", Sequence: cursor}) != nil {
@@ -417,11 +417,7 @@ func (m *shellSessions) run(s *shellSession, req shell.Request) (shell.Event, st
 		if err != nil {
 			return shell.Event{Type: "error", Error: err.Error()}, ""
 		}
-		var programs []string
-		if m.extensions != nil {
-			programs = m.extensions.Programs()
-		}
-		if cmd := shell.AliasCommand(aliases.String(), req.Alias, programs...); cmd.Program != "" || cmd.Unsupported != "" {
+		if cmd := shell.AliasCommand(aliases.String(), req.Alias, req.Programs...); cmd.Program != "" || cmd.Unsupported != "" {
 			return shell.Event{Type: "program", Program: cmd.Program, Error: cmd.Unsupported}, ""
 		}
 	}

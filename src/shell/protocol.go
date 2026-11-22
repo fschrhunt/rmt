@@ -3,9 +3,10 @@ package shell
 
 // Request is a command or interrupt sent over the host connection.
 type Request struct {
-	Type    string `json:"type"`
-	Command string `json:"command,omitempty"`
-	Alias   string `json:"alias,omitempty"`
+	Type     string   `json:"type"`
+	Command  string   `json:"command,omitempty"`
+	Alias    string   `json:"alias,omitempty"`
+	Programs []string `json:"programs,omitempty"`
 }
 
 // Version identifies the compatible shell protocol.

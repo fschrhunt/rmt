@@ -10,7 +10,6 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -61,7 +60,7 @@ func CodexDirect(ctx context.Context, profile network.Profile, address, dir stri
 	}
 	args = append(args, "--remote", "ws://"+l.Addr().String(), "--remote-auth-token-env", "RMT_REMOTE_TOKEN", "-C", dir)
 	args = append(args, extra...)
-	c := exec.CommandContext(ctx, "codex", args...)
+	c := terminalCommand(ctx, "codex", args...)
 	c.Env = append(os.Environ(), "RMT_REMOTE_TOKEN="+token)
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return c.Run()

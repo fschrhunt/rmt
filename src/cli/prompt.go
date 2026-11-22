@@ -304,10 +304,17 @@ func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Wr
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var remoteMu sync.Mutex
+	var launchMu sync.Mutex
 	var terminalState *readline.State
 	if terminal {
 		terminalState, _ = readline.GetState(int(os.Stdin.Fd()))
 	}
+	restoreTerminal := func() {
+		if terminalState != nil {
+			_ = readline.Restore(int(os.Stdin.Fd()), terminalState)
+		}
+	}
+	defer restoreTerminal()
 	terminated := make(chan os.Signal, 1)
 	signal.Notify(terminated, syscall.SIGHUP, syscall.SIGTERM)
 	defer signal.Stop(terminated)
@@ -317,15 +324,22 @@ func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Wr
 		select {
 		case <-terminated:
 			cancel()
-			finished := make(chan struct{})
-			go func() { remoteMu.Lock(); remote.Close(); remoteMu.Unlock(); close(finished) }()
-			select {
-			case <-finished:
-			case <-time.After(2 * time.Second):
+			closeDone, launchDone := make(chan struct{}), make(chan struct{})
+			go func() { remoteMu.Lock(); remote.Close(); remoteMu.Unlock(); close(closeDone) }()
+			go func() { launchMu.Lock(); launchMu.Unlock(); close(launchDone) }()
+			closed, launched := closeDone, launchDone
+			timeout := time.After(2 * time.Second)
+			for closed != nil || launched != nil {
+				select {
+				case <-closed:
+					closed = nil
+				case <-launched:
+					launched = nil
+				case <-timeout:
+					closed, launched = nil, nil
+				}
 			}
-			if terminalState != nil {
-				_ = readline.Restore(int(os.Stdin.Fd()), terminalState)
-			}
+			restoreTerminal()
 			os.Exit(0)
 		case <-done:
 			return
@@ -411,7 +425,11 @@ func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Wr
 		}
 		start := time.Now()
 		if cmd.Program == "" {
-			status, err = remote.RunPrompt(line, cmd.Alias, output)
+			var aliasPrograms []string
+			if cmd.Alias != "" {
+				aliasPrograms = programs
+			}
+			status, err = remote.RunPrompt(line, cmd.Alias, aliasPrograms, output)
 			var route *client.ProgramRoute
 			if errors.As(err, &route) {
 				if route.Unsupported != "" {
@@ -425,7 +443,11 @@ func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Wr
 		if cmd.Program != "" {
 			signals := make(chan os.Signal, 1)
 			signal.Notify(signals, os.Interrupt)
-			err = client.Launch(ctx, name, cmd.Program, line, remote, registry)
+			launchMu.Lock()
+			if ctx.Err() == nil {
+				err = client.Launch(ctx, name, cmd.Program, line, remote, registry)
+			}
+			launchMu.Unlock()
 			signal.Stop(signals)
 			status = 0
 			if err != nil {

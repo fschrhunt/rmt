@@ -122,9 +122,10 @@ them. The old control socket is recreated by the new service.
 
 ## Terminal behavior
 
-Input editing and history happen locally. Tab looks up remote paths without blocking typing;
-press it again to apply or list the results. Command output streams from the host; a slow live
-connection slows the stream rather than dropping output. The prompt uses ANSI colors only on a
+Input editing and history happen locally. Tab looks up remote paths and waits up to 75 ms for a
+reply; on a slow link, press Tab again for the results. Command output streams from the host.
+A slow live connection slows the stream rather than dropping output; if a write stalls for 15
+seconds, the host drops the connection and retains only the normal replay window. The prompt uses ANSI colors only on a
 terminal. Ordinary commands run in a
 persistent non-interactive shell, not a remote terminal: programs cannot read interactive
 stdin, and full-screen applications are not supported. Known programs such as `vim` and `tmux` are

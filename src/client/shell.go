@@ -193,11 +193,11 @@ func (s *Shell) Interrupt() {
 
 // Run streams one command's output and forwards Ctrl-C without replaying commands.
 func (s *Shell) Run(command string, output io.Writer) (int, error) {
-	return s.RunPrompt(command, "", output)
+	return s.RunPrompt(command, "", nil, output)
 }
 
-// RunPrompt optionally resolves an alias as part of command submission.
-func (s *Shell) RunPrompt(command, alias string, output io.Writer) (int, error) {
+// RunPrompt optionally resolves an alias using the client's registered programs.
+func (s *Shell) RunPrompt(command, alias string, programs []string, output io.Writer) (int, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	s.write.Lock()
@@ -205,7 +205,7 @@ func (s *Shell) RunPrompt(command, alias string, output io.Writer) (int, error) 
 		s.write.Unlock()
 		return 0, net.ErrClosed
 	}
-	err := wsjson.Write(ctx, s.conn, shell.Request{Type: "run", Command: command, Alias: alias})
+	err := wsjson.Write(ctx, s.conn, shell.Request{Type: "run", Command: command, Alias: alias, Programs: programs})
 	s.write.Unlock()
 	if err != nil {
 		if e := s.recover(s.host, output); e != nil {
