@@ -19,7 +19,8 @@ configuration or abstractions beyond what a change needs.
 
 - `main.go`: command entry point.
 - `install.sh`: checksum-verified release installer.
-- `.github/release/`: release preparation, archive packaging, and formula helpers.
+- `.github/release/`: release preparation, the changelog writer, archive packaging, and formula
+  helpers.
 - `src/cli/`: command dispatch, local prompt, and pairing.
 - `src/client/`: host connections and native application launches.
 - `src/hosts/`: host lifecycle and program supervision.
@@ -40,5 +41,5 @@ configuration or abstractions beyond what a change needs.
   never depend on a live Tailscale network, real programs, or model accounts.
 - Treat authentication, command execution, proxy behavior, and running host services as part of
   the user-facing contract. Do not restart installed services while testing without a reason.
-- Update the README and `CHANGELOG.md` when behavior changes. Keep comments accurate and focused
+- Update the README when behavior changes. Never edit `CHANGELOG.md` by hand; releases write it. Keep comments accurate and focused
   on purpose and contract.

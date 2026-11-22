@@ -6,4 +6,4 @@
 
 - `./x check` —
 
-<!-- Include relevant test results and limitations. Update the README and changelog for user-visible changes. -->
+<!-- Include relevant test results and limitations. Update the README for user-visible changes. -->

@@ -1,5 +1,8 @@
 # Changelog
 
+Written by each release, newest first; the same notes are on
+[GitHub Releases](https://github.com/fschrhunt/rmt/releases).
+
 ## Unreleased
 
 - Give ordinary commands a remote terminal from the usual prompt. Keyboard input, resize,
