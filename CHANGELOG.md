@@ -2,12 +2,17 @@
 
 ## Unreleased
 
+## v0.1.1 - 2026-11-22
+
+- Upgrade both the client and host to use shell protocol 10. Replacing an installed binary
+  does not restart a running host service.
 - Set up local background hosting on the first connection attempt. Later connections leave
   existing services alone. `rmt host disable` opts out persistently; `rmt host enable` turns
   hosting back on without changing pairings.
 - Resolve aliases within command submission, avoid dropping output on live connections, and
   cap how long Tab completion can hold up local input. Closing a tab normally releases its shell
-  and native attachment immediately. Update both client and host for shell protocol 10.
+  and native attachment immediately.
+- Update `golang.org/x/sys` to v0.50.0 and the `actions/setup-go` workflow action to v7.1.0.
 
 ## v0.1.0 - 2026-11-21
 
