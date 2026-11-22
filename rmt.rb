@@ -4,7 +4,7 @@
 class Rmt < Formula
   desc "Native program terminals connected to backends on another device"
   homepage "https://github.com/fschrhunt/rmt"
-  version "0.1.1"
+  version "0.1.2"
   license "MIT"
 
   livecheck do
@@ -14,23 +14,23 @@ class Rmt < Formula
 
   on_macos do
     on_arm do
-      url 'https://github.com/fschrhunt/rmt/releases/download/v0.1.1/rmt_v0.1.1_darwin_arm64.tar.gz'
-      sha256 'bd993c0d2b0647a991baffcf8c80c38cb651ed96bf67f94d3d4358feb20d88aa'
+      url 'https://github.com/fschrhunt/rmt/releases/download/v0.1.2/rmt_v0.1.2_darwin_arm64.tar.gz'
+      sha256 'e359a011d13b3d546e86717e41655773d0c290a0196a52491187791423debb89'
     end
     on_intel do
-      url 'https://github.com/fschrhunt/rmt/releases/download/v0.1.1/rmt_v0.1.1_darwin_amd64.tar.gz'
-      sha256 '6948df0dd16c55fde209f0c47c2abf21adff4754cece92373b63b856ba0527b5'
+      url 'https://github.com/fschrhunt/rmt/releases/download/v0.1.2/rmt_v0.1.2_darwin_amd64.tar.gz'
+      sha256 '518f0c244e6d520a4f2b5edf37d876e07de0817df595ab9a53efba30b9f6dc98'
     end
   end
 
   on_linux do
     on_arm do
-      url 'https://github.com/fschrhunt/rmt/releases/download/v0.1.1/rmt_v0.1.1_linux_arm64.tar.gz'
-      sha256 'dd40f90ff82c61ea25d6f46cb718cb07b3929b3583c6678ae81d884867b74206'
+      url 'https://github.com/fschrhunt/rmt/releases/download/v0.1.2/rmt_v0.1.2_linux_arm64.tar.gz'
+      sha256 '97af165167b8c2acacfb76de8d1a2d924f9f3a394155f10c11b49faee15eefe3'
     end
     on_intel do
-      url 'https://github.com/fschrhunt/rmt/releases/download/v0.1.1/rmt_v0.1.1_linux_amd64.tar.gz'
-      sha256 '7b14be42fb08a8f5b0c338a0c0e1a3355ab37c8fb52a22bdface42fed5eb5d97'
+      url 'https://github.com/fschrhunt/rmt/releases/download/v0.1.2/rmt_v0.1.2_linux_amd64.tar.gz'
+      sha256 '9e72e6f2135fa6d5dea5734b4747ff3c355726ccefb978e61f024b2ad5665e37'
     end
   end
 
