@@ -149,6 +149,69 @@ type commandResult struct {
 	err    error
 }
 
+// TestClientRoutesAliasOnSubmission checks that native aliases are not executed by the shell.
+func TestClientRoutesAliasOnSubmission(t *testing.T) {
+	newLoopbackHost(t)
+	remote, err := client.OpenShell("loopback")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer remote.Close()
+	if status, err := remote.Run("alias oc='opencode --help'; alias say='printf hello'", io.Discard); status != 0 || err != nil {
+		t.Fatalf("define aliases: %d, %v", status, err)
+	}
+	var output bytes.Buffer
+	_, err = remote.RunPrompt("oc", "oc", &output)
+	var route *client.ProgramRoute
+	if !errors.As(err, &route) || route.Program != "opencode" || output.Len() != 0 {
+		t.Fatalf("route = %v, output = %q", err, &output)
+	}
+	if status, err := remote.RunPrompt("say", "say", &output); status != 0 || err != nil || output.String() != "hello" {
+		t.Fatalf("ordinary alias: %d, %v, %q", status, err, &output)
+	}
+}
+
+// TestClientStreamsBeyondReplayLimit verifies that the live stream is not truncated by the replay limit.
+func TestClientStreamsBeyondReplayLimit(t *testing.T) {
+	newLoopbackHost(t)
+	remote, err := client.OpenShell("loopback")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer remote.Close()
+	var output bytes.Buffer
+	result := runClientCommand(t, remote, "/bin/dd if=/dev/zero bs=65536 count=64 2>/dev/null", &output)
+	if result.status != 0 || result.err != nil || output.Len() != 4<<20 || bytes.Count(output.Bytes(), []byte{0}) != 4<<20 {
+		t.Fatalf("streamed %d bytes, status %d, error %v", output.Len(), result.status, result.err)
+	}
+}
+
+// TestClientCloseReleasesRunningSession checks that a deliberate close leaves nothing to resume.
+func TestClientCloseReleasesRunningSession(t *testing.T) {
+	h := newLoopbackHost(t)
+	remote, err := client.OpenShell("loopback")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer remote.Close()
+	output := &startedOutput{onStarted: func() error {
+		remote.Close()
+		return nil
+	}}
+	runClientCommand(t, remote, "printf started; /bin/sleep 1; printf done", output)
+	select {
+	case <-h.detached:
+	case <-time.After(3 * time.Second):
+		t.Fatal("host did not release the connection")
+	}
+	if recovered, err := client.ResumeShell("loopback", remote); !errors.Is(err, client.ErrSessionExpired) {
+		if recovered != nil {
+			recovered.Close()
+		}
+		t.Fatalf("closed session could still be resumed: %v", err)
+	}
+}
+
 func runClientCommand(t *testing.T, remote *client.Shell, command string, output io.Writer) commandResult {
 	t.Helper()
 	done := make(chan commandResult, 1)

@@ -1,6 +1,7 @@
 package programs
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
@@ -17,7 +18,7 @@ import (
 )
 
 // CodexDirect runs the native UI through an authenticated local-to-HTTPS bridge.
-func CodexDirect(profile network.Profile, address, dir string, extra []string) error {
+func CodexDirect(ctx context.Context, profile network.Profile, address, dir string, extra []string) error {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return err
@@ -60,7 +61,7 @@ func CodexDirect(profile network.Profile, address, dir string, extra []string) e
 	}
 	args = append(args, "--remote", "ws://"+l.Addr().String(), "--remote-auth-token-env", "RMT_REMOTE_TOKEN", "-C", dir)
 	args = append(args, extra...)
-	c := exec.Command("codex", args...)
+	c := exec.CommandContext(ctx, "codex", args...)
 	c.Env = append(os.Environ(), "RMT_REMOTE_TOKEN="+token)
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return c.Run()

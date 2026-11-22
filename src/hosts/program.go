@@ -198,8 +198,11 @@ func (m *shellSessions) serveProgram(w http.ResponseWriter, r *http.Request) {
 			s.proxying--
 			s.mu.Unlock()
 		}()
+		ctx, cancel := context.WithCancel(r.Context())
+		defer cancel()
+		defer context.AfterFunc(s.ctx, cancel)()
 		prefix := "/program/" + token + "/" + name + "/proxy"
-		http.StripPrefix(prefix, http.HandlerFunc(b.proxy)).ServeHTTP(w, r)
+		http.StripPrefix(prefix, http.HandlerFunc(b.proxy)).ServeHTTP(w, r.WithContext(ctx))
 	default:
 		http.NotFound(w, r)
 	}

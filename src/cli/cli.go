@@ -5,7 +5,6 @@ import (
 	"bufio"
 	"fmt"
 	"log"
-	"net"
 	"os"
 	"path/filepath"
 
@@ -16,30 +15,6 @@ import (
 	"github.com/fschrhunt/rmt/src/network"
 	"github.com/fschrhunt/rmt/src/services"
 )
-
-// ensureHost starts this machine's user service once without replacing an existing service.
-func ensureHost() {
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "rmt: local host:", err)
-		return
-	}
-	if cfg.Serve != nil && !*cfg.Serve {
-		return
-	}
-	address := cfg.Listen
-	if address == "" {
-		address = "127.0.0.1:47473"
-	} else if host, port, e := net.SplitHostPort(address); e == nil {
-		if host == "" || (net.ParseIP(host) != nil && net.ParseIP(host).IsUnspecified()) {
-			host = "127.0.0.1"
-		}
-		address = net.JoinHostPort(host, port)
-	}
-	if err := services.Install(address); err != nil {
-		fmt.Fprintln(os.Stderr, "rmt: local host:", err)
-	}
-}
 
 // Main connects one host or runs the internal host service.
 func Main(version string) {
@@ -55,11 +30,28 @@ func Main(version string) {
 		}
 		return
 	}
-	if len(args) == 0 {
-		ensureHost()
-	}
 	if len(args) == 0 || (len(args) == 1 && (args[0] == "help" || args[0] == "--help" || args[0] == "-h")) {
-		fmt.Fprintln(os.Stdout, "Usage: rmt <host>\n\nConnect to a host using the addresses in ~/.rmt/settings.toml.\nType exit or press Ctrl-D to disconnect.\n\nExtensions: ~/.rmt/extensions/\nGuide: https://github.com/fschrhunt/rmt/blob/main/docs/extensions.md")
+		fmt.Fprintln(os.Stdout, "Usage: rmt <host>\n       rmt host enable|disable\n\nConnect to a host using the addresses in ~/.rmt/settings.toml.\nType exit or press Ctrl-D to disconnect.\n\nUse rmt host enable on a machine you want to connect to.\nUse rmt host disable to stop its background service and disconnect clients.\n\nExtensions: ~/.rmt/extensions/\nGuide: https://github.com/fschrhunt/rmt/blob/main/docs/extensions.md")
+		return
+	}
+	if len(args) == 2 && args[0] == "host" {
+		switch args[1] {
+		case "enable":
+			if _, err := config.Load(); err != nil {
+				log.Fatal("rmt: ", err)
+			}
+			if err := services.Enable(); err != nil {
+				log.Fatal("rmt: ", err)
+			}
+			fmt.Fprintln(os.Stdout, "rmt host service enabled")
+		case "disable":
+			if err := services.Disable(); err != nil {
+				log.Fatal("rmt: ", err)
+			}
+			fmt.Fprintln(os.Stdout, "rmt host service disabled")
+		default:
+			log.Fatal("usage: rmt host enable|disable")
+		}
 		return
 	}
 	if len(args) != 1 {
@@ -69,7 +61,6 @@ func Main(version string) {
 	if err := network.ValidateName(name); err != nil {
 		log.Fatal("rmt: ", err)
 	}
-	ensureHost()
 	root, err := config.Dir()
 	if err != nil {
 		log.Fatal("rmt: ", err)

@@ -57,7 +57,6 @@ Homebrew trust their download source and do not verify GitHub attestations thems
 Settings live in `~/.rmt/settings.toml`. Create the file on each machine as needed. All fields are optional:
 
 ```toml
-serve = true
 listen = "0.0.0.0:47473"
 programs = ["opencode", "codex"]
 shell = "/bin/zsh"
@@ -74,8 +73,6 @@ mini = "https://mini.example:47473"
 server = "https://192.168.1.10:47473"
 ```
 
-`serve` controls automatic local host-service installation and defaults to true. Set it to false
-before first use on a client-only machine; it does not stop a service that is already running.
 `listen` controls the host service's HTTPS listener and defaults to `0.0.0.0:47473`. Bind to a
 specific network interface if desired. `programs` selects programs; both built-in programs and
 locally registered extension programs are enabled by default.
@@ -91,17 +88,19 @@ keeping the same address and paired identity.
 
 ## Host service and pairing
 
-Install rmt and the desired programs on each machine. The first time you run `rmt` or
-`rmt <host>` on a machine, rmt installs and starts its user host service automatically on macOS
-or Linux with systemd. It keeps an existing service intact. Build from source with `./x build`
-or download a macOS/Linux archive from [GitHub Releases](https://github.com/fschrhunt/rmt/releases).
-Downloads require repository access while the repository is private; see the
-[release guide](CONTRIBUTING.md#releases) for checksum verification and the contributor process.
-Install the resulting binary somewhere permanent before first use. The service uses the `PATH`
-and non-secret native configuration paths from the first run. Existing service files are not
-rewritten. Environment-only credentials are not copied into the service file; use the program's
-own host-side authentication or configure the service environment separately. If its user service manager is unavailable,
-rmt reports the error while still allowing client connections.
+Install rmt and the desired programs on each machine. On a machine you want to connect **to**, run
+`rmt host enable` to install and start its background service (macOS or Linux with systemd).
+macOS may notify you when you enable hosting. Running `rmt <host>` only connects; it never enables
+local hosting. Existing host services keep running after an upgrade. The old `serve` setting is
+accepted but no longer used.
+
+Use `rmt host disable` to stop the background service and prevent it from starting again at login.
+This disconnects clients but keeps your settings and pairings. Run `rmt host enable` to resume hosting.
+
+Install the binary somewhere permanent before enabling hosting. The service uses the `PATH` and
+non-secret native configuration paths from when it was first enabled. Existing service files are
+not rewritten. Environment-only credentials are not copied into the service file; use the program's
+own host-side authentication or configure the service environment separately.
 
 The first `rmt <host>` connection prompts for pairing. On the host, open the private
 `~/.rmt/pairing.json` file, compare its `verify` value with
@@ -123,14 +122,19 @@ them. The old control socket is recreated by the new service.
 
 ## Terminal behavior
 
-Input editing and history happen locally; Tab completes remote paths, and the prompt uses ANSI colors only on a terminal. Command output comes from the host. Ordinary commands run in a
+Input editing and history happen locally. Tab looks up remote paths without blocking typing;
+press it again to apply or list the results. Command output streams from the host; a slow live
+connection slows the stream rather than dropping output. The prompt uses ANSI colors only on a
+terminal. Ordinary commands run in a
 persistent non-interactive shell, not a remote terminal: programs cannot read interactive
 stdin, and full-screen applications are not supported. Known programs such as `vim` and `tmux` are
 reported as unsupported, but rmt cannot identify every interactive program. Ctrl-C asks the host
 to terminate the current command. If a connection drops during a command, its outcome may be
 unknown; rmt does not replay it. After a network interruption, rmt attempts to reconnect to the
 same shell. The host retains its shell state and up to 1 MiB of output for 15 seconds; it reports
-any lost output. A shell command already running when the connection closes is allowed to finish.
+any lost output. Typing `exit` or closing a terminal tab normally ends the attachment immediately
+instead of reserving it for reconnect. A shell command already running when the connection closes
+is allowed to finish; native backends manage their own running work.
 After the grace period, an idle shell is cleaned up. If the rmt host restarts or the session
 expires, rmt starts a new shell and tries to restore the last known directory. Supported native applications are `opencode` and `codex`, launched
 as standalone commands. Their arguments are expanded on the host, and direct aliases such as `oc`

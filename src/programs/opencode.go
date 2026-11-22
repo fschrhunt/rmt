@@ -2,6 +2,7 @@
 package programs
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
@@ -40,7 +41,7 @@ func translateLocation(r *http.Request, local, remote string) {
 }
 
 // OpenCodeAt runs the native client through a local bridge to a selected host.
-func OpenCodeAt(target *url.URL, transport http.RoundTripper, directory string, extra []string) error {
+func OpenCodeAt(ctx context.Context, target *url.URL, transport http.RoundTripper, directory string, extra []string) error {
 	localDir, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("current directory: %w", err)
@@ -73,7 +74,7 @@ func OpenCodeAt(target *url.URL, transport http.RoundTripper, directory string, 
 	go func() { _ = srv.Serve(l) }()
 	defer srv.Close()
 	args := append([]string{"--server", "http://" + l.Addr().String(), localDir}, extra...)
-	c := exec.Command("opencode", args...)
+	c := exec.CommandContext(ctx, "opencode", args...)
 	c.Env = append(os.Environ(), "OPENCODE_PASSWORD="+password)
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout

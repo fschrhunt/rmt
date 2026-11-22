@@ -5,10 +5,11 @@ package shell
 type Request struct {
 	Type    string `json:"type"`
 	Command string `json:"command,omitempty"`
+	Alias   string `json:"alias,omitempty"`
 }
 
 // Version identifies the compatible shell protocol.
-const Version = 9
+const Version = 10
 
 // Event is streamed command output, the current remote directory, or an error.
 type Event struct {
@@ -25,6 +26,7 @@ type Event struct {
 	Host      string `json:"host,omitempty"`
 	Status    int    `json:"status,omitempty"`
 	Error     string `json:"error,omitempty"`
+	Program   string `json:"program,omitempty"`
 }
 
 // Git describes the repository state shown in the local prompt.

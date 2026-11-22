@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -23,6 +24,14 @@ type ConnectionError struct{ Err error }
 // ErrSessionExpired means a previous shell no longer exists on the host.
 var ErrSessionExpired = errors.New("shell session expired or unavailable")
 
+// ProgramRoute means the host did not execute the command: it resolved to a native or unsupported application.
+type ProgramRoute struct {
+	Program     string
+	Unsupported string
+}
+
+func (r *ProgramRoute) Error() string { return "host routed command to an application" }
+
 func (e *ConnectionError) Error() string {
 	return fmt.Sprintf("connection lost; command outcome may be unknown: %v", e.Err)
 }
@@ -31,6 +40,7 @@ func (e *ConnectionError) Unwrap() error { return e.Err }
 // Shell keeps a local connection to one persistent command shell on the host.
 type Shell struct {
 	host      string
+	base      string
 	home      string
 	user      string
 	hostname  string
@@ -42,6 +52,7 @@ type Shell struct {
 	running   bool
 	available uint64
 	write     sync.Mutex
+	closing   bool
 }
 
 // OpenShell connects to the selected host and returns its home directory.
@@ -106,7 +117,7 @@ func openShell(host, session string, after uint64) (*Shell, error) {
 		}
 		return nil, errors.New("invalid host shell response")
 	}
-	return &Shell{host: host, home: event.Home, user: event.User, hostname: event.Host, conn: conn, client: target.client, directory: event.Directory, session: event.Session, sequence: after, running: event.Running, available: event.Sequence}, nil
+	return &Shell{host: host, base: target.base, home: event.Home, user: event.User, hostname: event.Host, conn: conn, client: target.client, directory: event.Directory, session: event.Session, sequence: after, running: event.Running, available: event.Sequence}, nil
 }
 
 // ResumeShell reconnects a prompt to its existing shell and preserves its state.
@@ -117,6 +128,10 @@ func ResumeShell(host string, old *Shell) (*Shell, error) {
 // recover reconnects without replaying a command and swaps the active transport.
 func (s *Shell) recover(host string, output io.Writer) error {
 	s.write.Lock()
+	if s.closing {
+		s.write.Unlock()
+		return net.ErrClosed
+	}
 	_ = s.conn.CloseNow()
 	s.client.CloseIdleConnections()
 	s.write.Unlock()
@@ -132,11 +147,17 @@ func (s *Shell) recover(host string, output io.Writer) error {
 			continue
 		}
 		s.write.Lock()
+		if s.closing {
+			s.write.Unlock()
+			next.Close()
+			return net.ErrClosed
+		}
 		s.home = next.home
 		s.user = next.user
 		s.hostname = next.hostname
 		s.conn = next.conn
 		s.client = next.client
+		s.base = next.base
 		s.directory = next.directory
 		s.running = next.running
 		s.available = next.available
@@ -165,15 +186,26 @@ func (s *Shell) Interrupt() {
 	defer cancel()
 	s.write.Lock()
 	defer s.write.Unlock()
-	_ = wsjson.Write(ctx, s.conn, shell.Request{Type: "interrupt"})
+	if !s.closing {
+		_ = wsjson.Write(ctx, s.conn, shell.Request{Type: "interrupt"})
+	}
 }
 
 // Run streams one command's output and forwards Ctrl-C without replaying commands.
 func (s *Shell) Run(command string, output io.Writer) (int, error) {
+	return s.RunPrompt(command, "", output)
+}
+
+// RunPrompt optionally resolves an alias as part of command submission.
+func (s *Shell) RunPrompt(command, alias string, output io.Writer) (int, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	s.write.Lock()
-	err := wsjson.Write(ctx, s.conn, shell.Request{Type: "run", Command: command})
+	if s.closing {
+		s.write.Unlock()
+		return 0, net.ErrClosed
+	}
+	err := wsjson.Write(ctx, s.conn, shell.Request{Type: "run", Command: command, Alias: alias})
 	s.write.Unlock()
 	if err != nil {
 		if e := s.recover(s.host, output); e != nil {
@@ -193,9 +225,7 @@ func (s *Shell) Run(command string, output io.Writer) (int, error) {
 		for {
 			select {
 			case <-signals:
-				s.write.Lock()
-				_ = wsjson.Write(ctx, s.conn, shell.Request{Type: "interrupt"})
-				s.write.Unlock()
+				s.Interrupt()
 			case <-done:
 				return
 			case <-ctx.Done():
@@ -232,6 +262,8 @@ func (s *Shell) Run(command string, output io.Writer) (int, error) {
 			return event.Status, nil
 		case "error":
 			return 0, fmt.Errorf("host shell: %s", event.Error)
+		case "program":
+			return 0, &ProgramRoute{Program: event.Program, Unsupported: event.Error}
 		default:
 			return 0, errors.New("invalid host shell response")
 		}
@@ -242,6 +274,12 @@ func (s *Shell) Run(command string, output io.Writer) (int, error) {
 func (s *Shell) Close() {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	s.write.Lock()
+	if s.closing {
+		s.write.Unlock()
+		cancel()
+		return
+	}
+	s.closing = true
 	conn, httpClient := s.conn, s.client
 	_ = wsjson.Write(ctx, conn, shell.Request{Type: "close"})
 	s.write.Unlock()
