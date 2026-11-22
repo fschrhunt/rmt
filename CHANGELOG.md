@@ -2,8 +2,9 @@
 
 ## Unreleased
 
-- Make background hosting opt-in with `rmt host enable` and `rmt host disable`. Connecting to
-  another machine no longer starts a local background service. Existing hosts and pairings stay intact.
+- Set up local background hosting on the first connection attempt. Later connections leave
+  existing services alone. `rmt host disable` opts out persistently; `rmt host enable` turns
+  hosting back on without changing pairings.
 - Resolve aliases within command submission, avoid dropping output on live connections, and
   cap how long Tab completion can hold up local input. Closing a tab normally releases its shell
   and native attachment immediately. Update both client and host for shell protocol 10.

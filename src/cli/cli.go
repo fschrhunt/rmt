@@ -31,27 +31,18 @@ func Main(version string) {
 		return
 	}
 	if len(args) == 0 || (len(args) == 1 && (args[0] == "help" || args[0] == "--help" || args[0] == "-h")) {
-		fmt.Fprintln(os.Stdout, "Usage: rmt <host>\n       rmt host enable|disable\n\nConnect to a host using the addresses in ~/.rmt/settings.toml.\nType exit or press Ctrl-D to disconnect.\n\nUse rmt host enable on a machine you want to connect to.\nUse rmt host disable to stop its background service and disconnect clients.\n\nExtensions: ~/.rmt/extensions/\nGuide: https://github.com/fschrhunt/rmt/blob/main/docs/extensions.md")
+		fmt.Fprintln(os.Stdout, "Usage: rmt <host>\n       rmt host enable|disable\n\nConnect to a host using the addresses in ~/.rmt/settings.toml.\nType exit or press Ctrl-D to disconnect.\n\nThe first connection attempt sets up background hosting on this machine.\nUse rmt host disable to opt out and disconnect inbound clients.\nUse rmt host enable to turn hosting back on.\n\nExtensions: ~/.rmt/extensions/\nGuide: https://github.com/fschrhunt/rmt/blob/main/docs/extensions.md")
 		return
 	}
 	if len(args) == 2 && args[0] == "host" {
-		switch args[1] {
-		case "enable":
-			if _, err := config.Load(); err != nil {
-				log.Fatal("rmt: ", err)
-			}
-			if err := services.Enable(); err != nil {
-				log.Fatal("rmt: ", err)
-			}
-			fmt.Fprintln(os.Stdout, "rmt host service enabled")
-		case "disable":
-			if err := services.Disable(); err != nil {
-				log.Fatal("rmt: ", err)
-			}
-			fmt.Fprintln(os.Stdout, "rmt host service disabled")
-		default:
+		action := args[1]
+		if action != "enable" && action != "disable" {
 			log.Fatal("usage: rmt host enable|disable")
 		}
+		if err := manageHost(action); err != nil {
+			log.Fatal("rmt: ", err)
+		}
+		fmt.Fprintf(os.Stdout, "rmt host service %sd\n", action)
 		return
 	}
 	if len(args) != 1 {
@@ -64,6 +55,13 @@ func Main(version string) {
 	root, err := config.Dir()
 	if err != nil {
 		log.Fatal("rmt: ", err)
+	}
+	cfg, err := config.Read(filepath.Join(root, "settings.toml"))
+	if err != nil {
+		log.Fatal("rmt: ", err)
+	}
+	if err := startLocalHost(root, cfg, services.EnableOnFirstUse); err != nil {
+		fmt.Fprintln(os.Stderr, "rmt: local host:", err)
 	}
 	registry, err := extensions.Load(filepath.Join(root, "extensions"))
 	if err != nil {

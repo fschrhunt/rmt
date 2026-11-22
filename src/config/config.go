@@ -24,7 +24,7 @@ type Prompt struct {
 
 // Config selects host listeners, native programs, and named remote addresses.
 type Config struct {
-	Serve    *bool             `toml:"serve,omitempty"` // Legacy setting; hosting now requires an explicit command.
+	Serve    *bool             `toml:"serve,omitempty"` // Legacy opt-out from first-use hosting.
 	Programs []string          `toml:"programs,omitempty"`
 	Listen   string            `toml:"listen,omitempty"`
 	Shell    string            `toml:"shell,omitempty"`
