@@ -15,9 +15,11 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/creack/pty"
 	"github.com/fschrhunt/rmt/src/client"
 	"github.com/fschrhunt/rmt/src/network"
 )
@@ -149,6 +151,135 @@ type commandResult struct {
 	err    error
 }
 
+// TestClientTerminalHandsOffInputAndResize covers the complete paired PTY path.
+func TestClientTerminalHandsOffInputAndResize(t *testing.T) {
+	newLoopbackHost(t)
+	remote, err := client.OpenTerminalShell("loopback", "xterm-256color")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer remote.Close()
+	master, input, err := pty.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer master.Close()
+	defer input.Close()
+	if err := pty.Setsize(input, &pty.Winsize{Rows: 24, Cols: 90}); err != nil {
+		t.Fatal(err)
+	}
+	output := &startedOutput{onStarted: func() error {
+		if err := pty.Setsize(input, &pty.Winsize{Rows: 34, Cols: 119}); err != nil {
+			return err
+		}
+		if err := syscall.Kill(os.Getpid(), syscall.SIGWINCH); err != nil {
+			return err
+		}
+		_, err := io.WriteString(master, "café 界🙂界\x7f\n")
+		return err
+	}}
+	done := make(chan commandResult, 1)
+	go func() {
+		status, err := remote.RunTerminal(`test -t 0 && test -t 1 || exit 7; stty size; printf started; IFS= read -r answer; printf '\nanswer=\033[32m%s\033[0m\n' "$answer"; i=0; while [ "$(stty size)" != '34 119' ] && [ "$i" -lt 50 ]; do /bin/sleep .02; i=$((i+1)); done; stty size; cd /; (exit 23)`, "", nil, output, io.Discard, input)
+		done <- commandResult{status, err}
+	}()
+	select {
+	case result := <-done:
+		if result.status != 23 || result.err != nil {
+			t.Fatalf("terminal command = %+v, output = %q", result, output.String())
+		}
+	case <-time.After(6 * time.Second):
+		remote.Close()
+		<-done
+		t.Fatal("terminal command did not finish")
+	}
+	for _, want := range []string{"24 90", "answer=\x1b[32mcafé 界🙂\x1b[0m", "34 119"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("missing %q in %q", want, output.String())
+		}
+	}
+	if remote.Directory() != "/" {
+		t.Fatalf("terminal command lost shell directory: %q", remote.Directory())
+	}
+	output = &startedOutput{onStarted: func() error {
+		_, err := master.Write([]byte{3})
+		return err
+	}}
+	go func() {
+		status, err := remote.RunTerminal(`/bin/sh -c 'trap "exit 130" INT; printf started; while :; do /bin/sleep 0.1; done'`, "", nil, output, io.Discard, input)
+		done <- commandResult{status, err}
+	}()
+	select {
+	case result := <-done:
+		if result.err != nil || result.status != 130 {
+			t.Fatalf("Ctrl-C = %+v, output = %q", result, output.String())
+		}
+	case <-time.After(3 * time.Second):
+		remote.Close()
+		<-done
+		t.Fatalf("Ctrl-C did not interrupt the terminal command: %q", output.String())
+	}
+	if result := runClientCommand(t, remote, "printf alive", io.Discard); result.err != nil || result.status != 0 {
+		t.Fatalf("shell did not survive Ctrl-C: %+v", result)
+	}
+}
+
+// TestTerminalDisconnectHangsUpForegroundCommand checks that a lost terminal cannot be resumed.
+func TestTerminalDisconnectHangsUpForegroundCommand(t *testing.T) {
+	h := newLoopbackHost(t)
+	remote, err := client.OpenTerminalShell("loopback", "xterm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer remote.Close()
+	master, input, err := pty.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer master.Close()
+	defer input.Close()
+	conn := <-h.hijacked
+	h.manager.mu.Lock()
+	var hosted *shellSession
+	for _, hosted = range h.manager.sessions {
+		break
+	}
+	h.manager.mu.Unlock()
+	if hosted == nil {
+		t.Fatal("missing host session")
+	}
+	output := &startedOutput{onStarted: conn.Close}
+	done := make(chan error, 1)
+	go func() {
+		_, err := remote.RunTerminal(`/bin/sh -c 'printf started; sleep 30'`, "", nil, output, io.Discard, input)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("unexpectedly completed after losing the terminal")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("client did not leave its terminal")
+	}
+	select {
+	case <-h.detached:
+	case <-time.After(3 * time.Second):
+		t.Fatal("host attachment did not end")
+	}
+	select {
+	case <-hosted.sh.done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("host PTY shell survived detachment")
+	}
+	if recovered, err := client.ResumeShell("loopback", remote); !errors.Is(err, client.ErrSessionExpired) {
+		if recovered != nil {
+			recovered.Close()
+		}
+		t.Fatalf("terminal session can still be resumed: %v", err)
+	}
+}
+
 // TestClientRoutesAliasOnSubmission checks that native aliases are not executed by the shell.
 func TestClientRoutesAliasOnSubmission(t *testing.T) {
 	newLoopbackHost(t)
@@ -162,13 +293,13 @@ func TestClientRoutesAliasOnSubmission(t *testing.T) {
 	}
 	var output bytes.Buffer
 	for alias, program := range map[string]string{"oc": "opencode", "custom": "clienttool"} {
-		_, err = remote.RunPrompt(alias, alias, []string{"clienttool"}, &output)
+		_, err = remote.RunPrompt(alias, alias, []string{"clienttool"}, &output, io.Discard)
 		var route *client.ProgramRoute
 		if !errors.As(err, &route) || route.Program != program || output.Len() != 0 {
 			t.Fatalf("%s: route = %v, output = %q", alias, err, &output)
 		}
 	}
-	if status, err := remote.RunPrompt("say", "say", nil, &output); status != 0 || err != nil || output.String() != "hello" {
+	if status, err := remote.RunPrompt("say", "say", nil, &output, io.Discard); status != 0 || err != nil || output.String() != "hello" {
 		t.Fatalf("ordinary alias: %d, %v, %q", status, err, &output)
 	}
 }

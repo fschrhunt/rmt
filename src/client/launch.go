@@ -32,17 +32,21 @@ func Launch(ctx context.Context, host, programName, line string, remote *Shell, 
 		return e
 	}
 	defer target.client.CloseIdleConnections()
-	res, e := target.client.Get(target.base + "/info")
+	infoRequest, e := http.NewRequestWithContext(ctx, http.MethodGet, target.base+"/info", nil)
 	if e != nil {
-		return fmt.Errorf("cannot reach %s; check that its host service is running: %w", host, e)
+		return e
+	}
+	res, e := target.client.Do(infoRequest)
+	if e != nil {
+		return fmt.Errorf("check %s on %s: %w", programName, host, dialError(host, target.base, e))
 	}
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
-		return fmt.Errorf("host refused connection: %s", res.Status)
+		return fmt.Errorf("check %s on %s: host returned %s", programName, host, res.Status)
 	}
 	var info network.Info
 	if e = json.NewDecoder(io.LimitReader(res.Body, 4096)).Decode(&info); e != nil || info.Home == "" {
-		return errors.New("invalid host response")
+		return fmt.Errorf("check %s on %s: invalid host response", programName, host)
 	}
 	if !(config.Config{Programs: info.Programs}).Enabled(programName) {
 		return fmt.Errorf("%s is not enabled on %s; check its config", programName, host)
@@ -52,10 +56,7 @@ func Launch(ctx context.Context, host, programName, line string, remote *Shell, 
 	}
 	if programName == "opencode" || programName == "codex" {
 		if err := programs.Check(programName, false); err != nil {
-			return err
-		}
-		if local, remote := programs.Version(programName), info.Versions[programName]; local != "" && remote != "" && local != remote {
-			fmt.Fprintf(os.Stderr, "rmt: %s CLI versions differ (local %s, host %s); update them if the connection fails\n", programName, local, remote)
+			return fmt.Errorf("check local %s client: %w", programName, err)
 		}
 	}
 	if !filepath.IsAbs(dir) {
@@ -122,28 +123,41 @@ func Launch(ctx context.Context, host, programName, line string, remote *Shell, 
 	response, err := starter.Do(request)
 	stopStart()
 	if err != nil {
-		return fmt.Errorf("cannot start %s on %s: %w", programName, host, err)
+		return fmt.Errorf("cannot start %s backend on %s: %w", programName, host, err)
 	}
 	if response.StatusCode != http.StatusNoContent {
 		body, _ := io.ReadAll(io.LimitReader(response.Body, 1024))
 		response.Body.Close()
-		return fmt.Errorf("cannot start %s on %s: %s", programName, host, strings.TrimSpace(string(body)))
+		detail := strings.TrimSpace(string(body))
+		if detail == "" {
+			detail = response.Status
+		}
+		return fmt.Errorf("cannot start %s backend on %s: %s", programName, host, detail)
 	}
 	response.Body.Close()
 
 	if programName == "opencode" {
-		transport, err := target.profile.Transport()
-		if err != nil {
-			return err
+		transport, bridgeErr := target.profile.Transport()
+		if bridgeErr != nil {
+			return fmt.Errorf("configure local OpenCode bridge: %w", bridgeErr)
 		}
-		endpoint, err := url.Parse(base + "/proxy")
-		if err != nil {
-			return err
+		endpoint, bridgeErr := url.Parse(base + "/proxy")
+		if bridgeErr != nil {
+			return fmt.Errorf("configure local OpenCode bridge: %w", bridgeErr)
 		}
-		return programs.OpenCodeAt(ctx, endpoint, transport, dir, extra)
+		err = programs.OpenCodeAt(ctx, endpoint, transport, dir, extra)
+	} else if programName == "codex" {
+		err = programs.CodexDirect(ctx, *target.profile, base+"/proxy", dir, extra)
+	} else {
+		err = programs.Custom(ctx, registry, *target.profile, base+"/proxy", programName, dir, extra)
 	}
-	if programName == "codex" {
-		return programs.CodexDirect(ctx, *target.profile, base+"/proxy", dir, extra)
+	if err != nil {
+		if hostVersion := info.Versions[programName]; ctx.Err() == nil && hostVersion != "" {
+			if local := programs.Version(programName); local != "" && local != hostVersion {
+				return fmt.Errorf("local %s UI: %w (local version %s, host version %s)", programName, err, local, hostVersion)
+			}
+		}
+		return fmt.Errorf("local %s UI: %w", programName, err)
 	}
-	return programs.Custom(ctx, registry, *target.profile, base+"/proxy", programName, dir, extra)
+	return nil
 }

@@ -167,10 +167,15 @@ func TestLocalControlIsPrivate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.StartLocal(); err != nil {
+	want := HostStatus{Version: "0.1.2", Listen: "127.0.0.1:47473"}
+	if err := h.StartLocal(want); err != nil {
 		t.Fatal(err)
 	}
 	defer h.Close()
+	var running HostStatus
+	if err := Control(dir, http.MethodGet, "/status", nil, &running); err != nil || running != want {
+		t.Fatalf("running host = %+v: %v", running, err)
+	}
 	info, err := os.Stat(filepath.Join(dir, "host.sock"))
 	if err != nil || info.Mode().Perm() != 0600 {
 		t.Fatalf("socket permissions: %v %v", info, err)

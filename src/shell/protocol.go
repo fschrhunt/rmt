@@ -7,10 +7,16 @@ type Request struct {
 	Command  string   `json:"command,omitempty"`
 	Alias    string   `json:"alias,omitempty"`
 	Programs []string `json:"programs,omitempty"`
+	Data     []byte   `json:"data,omitempty"`
+	Turn     uint64   `json:"turn,omitempty"`
+	Size     Size     `json:"size,omitzero"`
 }
 
+// Size holds terminal dimensions in character cells.
+type Size struct{ Rows, Cols uint16 }
+
 // Version identifies the compatible shell protocol.
-const Version = 10
+const Version = 11
 
 // Event is streamed command output, the current remote directory, or an error.
 type Event struct {
@@ -28,6 +34,7 @@ type Event struct {
 	Status    int    `json:"status,omitempty"`
 	Error     string `json:"error,omitempty"`
 	Program   string `json:"program,omitempty"`
+	Terminal  bool   `json:"terminal,omitempty"`
 }
 
 // Git describes the repository state shown in the local prompt.

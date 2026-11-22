@@ -32,6 +32,7 @@ sessions. The rmt host service stays available for other devices.
 ## Installation
 
 rmt supports macOS 13 or newer and Linux.
+If Fish can't find an installation in `~/.local/bin`, run `fish_add_path ~/.local/bin`.
 
 Build rmt with `./x build` and put `dist/rmt` in a permanent directory on your `PATH`. Once a
 release and its Homebrew formula are published, these installation routes are available when
@@ -77,8 +78,9 @@ server = "https://192.168.1.10:47473"
 specific network interface if desired. `programs` selects programs; both built-in programs and
 locally registered extension programs are enabled by default.
 `prompt.style` is `pure` (the default) or `inherit`.
-`shell` is an absolute path to a shell, defaulting to the host service's `$SHELL`, or `/bin/sh`
-when that is unset. For zsh and bash, rmt loads `.zshrc` or `.bashrc` for ordinary host commands;
+`shell` is an absolute path to a Bourne-compatible shell, defaulting to the host service's
+`$SHELL`, or `/bin/sh` when that is unset or Fish. You can still run `fish` in the remote
+terminal. For zsh and bash, rmt loads `.zshrc` or `.bashrc` for ordinary host commands;
 startup files receive no interactive input and may skip settings that require a terminal. `hosts` maps
 local names to reachable HTTPS addresses. Without an entry, `rmt mini` connects to
 `https://mini:47473`, using normal DNS or your network's name resolution. Use LAN, VPN, Tailscale,
@@ -88,11 +90,15 @@ keeping the same address and paired identity.
 
 ## Host service and pairing
 
+Run `rmt status` to see the local host, its service registrations, and known hosts with their
+pairing state. It does not start hosting or probe remote hosts.
+
 Install rmt and the desired programs on each machine. The first `rmt <host>` sets up the
 background service **on the machine where you run it** (macOS or Linux with systemd). This
 doesn't install or start anything on the destination. To make a machine reachable before its
 first outbound connection, run `rmt host enable` there. macOS may notify you when the service
-is registered. Later connections leave existing services alone.
+is registered. Later connections leave existing services alone, including rmt hosts already
+running under a different service name.
 
 Use `rmt host disable` to stop the background service and prevent it from starting again at login.
 This disconnects inbound clients but keeps your settings and pairings. Future connections won't
@@ -124,20 +130,30 @@ them. The old control socket is recreated by the new service.
 
 ## Terminal behavior
 
-Input editing and history happen locally. Tab looks up remote paths and waits up to 75 ms for a
+Input editing and history happen locally. rmt colors shell syntax as you type and underlines
+command names; this is a visual cue, not a check that a command exists on the host. Set `NO_COLOR`
+to skip input highlighting. Bare `clear` clears the local screen in an interactive terminal.
+Tab looks up remote paths and waits up to 75 ms for a
 reply; on a slow link, press Tab again for the results. Command output streams from the host.
+When input or output is piped, rmt suppresses prompts and sends its own diagnostics to stderr.
+Pair a new host in an interactive terminal before using it in a pipe.
 A slow live connection slows the stream rather than dropping output; if a write stalls for 15
 seconds, the host drops the connection and retains only the normal replay window. The prompt uses ANSI colors only on a
-terminal. Ordinary commands run in a
-persistent non-interactive shell, not a remote terminal: programs cannot read interactive
-stdin, and full-screen applications are not supported. Known programs such as `vim` and `tmux` are
-reported as unsupported, but rmt cannot identify every interactive program. Ctrl-C asks the host
-to terminate the current command. If a connection drops during a command, its outcome may be
-unknown; rmt does not replay it. After a network interruption, rmt attempts to reconnect to the
+terminal. At an interactive prompt, ordinary commands get a remote pseudo-terminal automatically.
+Run `nvim`, `less`, or another terminal app directly: rmt forwards keystrokes and resizes and lets
+your local terminal render the app. The command line itself is still edited locally, and rmt does
+not predict keystrokes inside a running app. The persistent shell is driven by rmt, so it is not a
+full login shell with job control, and its terminal doesn't suspend the shell on Ctrl-Z. Piped input
+or output still uses a non-terminal shell.
+Ctrl-C in a remote terminal is handled by the application or the terminal driver.
+If a connection drops during a command, its outcome may be unknown; rmt does not replay it.
+An active remote terminal command is not resumed on disconnect. For non-terminal commands, rmt
+attempts to reconnect to the
 same shell. The host retains its shell state and up to 1 MiB of output for 15 seconds; it reports
 any lost output. Typing `exit` or closing a terminal tab normally ends the attachment immediately
 instead of reserving it for reconnect. A shell command already running when the connection closes
-is allowed to finish; native backends manage their own running work.
+is allowed to finish on the non-terminal path; an active pseudo-terminal is hung up. Native
+backends manage their own running work.
 After the grace period, an idle shell is cleaned up. If the rmt host restarts or the session
 expires, rmt starts a new shell and tries to restore the last known directory. Supported native applications are `opencode` and `codex`, launched
 as standalone commands. Their arguments are expanded on the host, and direct aliases such as `oc`

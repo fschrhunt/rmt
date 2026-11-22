@@ -2,14 +2,52 @@
 package services
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
+
+// Registrations lists known service definitions or loaded macOS jobs without changing them.
+func Registrations() ([]string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	file, err := definitionPath(home)
+	if err != nil {
+		return nil, err
+	}
+	files := []string{file}
+	if runtime.GOOS == "darwin" {
+		files = append(files, filepath.Join(filepath.Dir(file), "com.fschr.rmt.plist"))
+	}
+	var found []string
+	for _, file := range files {
+		_, err := os.Lstat(file)
+		name := filepath.Base(file)
+		if errors.Is(err, os.ErrNotExist) && runtime.GOOS == "darwin" {
+			ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+			label := fmt.Sprintf("gui/%d/%s", os.Getuid(), strings.TrimSuffix(name, ".plist"))
+			loaded := exec.CommandContext(ctx, "launchctl", "print", label).Run() == nil
+			cancel()
+			if loaded {
+				found = append(found, name)
+			}
+		} else if err == nil {
+			found = append(found, name)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+	}
+	return found, nil
+}
 
 // nativePaths retains only non-secret paths needed to locate native program settings.
 func nativePaths() map[string]string {
@@ -57,11 +95,22 @@ func enable(firstUse bool) error {
 	if err != nil {
 		return err
 	}
-	if firstUse {
-		if _, err := os.Lstat(servicePath); err == nil {
+	if _, err := os.Lstat(servicePath); err == nil {
+		if firstUse {
 			return nil
-		} else if !errors.Is(err, os.ErrNotExist) {
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	} else {
+		legacy, err := legacyHostDefined(home)
+		if err != nil {
 			return err
+		}
+		if legacy || hostAlreadyRunning(home) {
+			if firstUse {
+				return nil
+			}
+			return errors.New("rmt hosting is already set up outside the managed service; stop it and retire any older service definition before enabling a new one")
 		}
 	}
 	binary, err := os.Executable()
@@ -140,6 +189,28 @@ func enable(firstUse bool) error {
 		return fmt.Errorf("could not start the host service at %s: %w", servicePath, err)
 	}
 	return nil
+}
+
+// legacyHostDefined recognizes the macOS LaunchAgent used before com.rmt.host.
+func legacyHostDefined(home string) (bool, error) {
+	if runtime.GOOS != "darwin" {
+		return false, nil
+	}
+	_, err := os.Lstat(filepath.Join(home, "Library", "LaunchAgents", "com.fschr.rmt.plist"))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// hostAlreadyRunning checks rmt's private control socket independently of its service label.
+func hostAlreadyRunning(home string) bool {
+	conn, err := net.DialTimeout("unix", filepath.Join(home, ".rmt", "host.sock"), 200*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
 }
 
 // Disable stops the host and prevents it from starting at login, preserving its files and pairings.

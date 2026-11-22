@@ -56,7 +56,12 @@ func completionHandler(home string) http.Handler {
 				continue
 			}
 			name := before + entry.Name()
-			if entry.IsDir() {
+			isDir := entry.IsDir()
+			if entry.Type()&os.ModeSymlink != 0 {
+				info, err := os.Stat(filepath.Join(dir, entry.Name()))
+				isDir = err == nil && info.IsDir()
+			}
+			if isDir {
 				name += "/"
 			}
 			matches = append(matches, name)

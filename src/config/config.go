@@ -56,15 +56,33 @@ func Path() (string, string, error) {
 	if err := migrate(legacyDir(home), root); err != nil {
 		return "", "", err
 	}
-	if info, err := os.Lstat(root); err == nil {
-		owner, ok := info.Sys().(*syscall.Stat_t)
-		if !info.IsDir() || info.Mode().Perm()&0077 != 0 || !ok || owner.Uid != uint32(os.Getuid()) {
-			return "", "", fmt.Errorf("%s must be an owner-only directory owned by this user", root)
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
+	if err := validateRoot(root); err != nil {
 		return "", "", err
 	}
 	return filepath.Join(root, "settings.toml"), home, nil
+}
+
+// StatusDir returns the configuration directory without migrating or creating anything.
+func StatusDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return "", errors.New("cannot determine home directory")
+	}
+	root := filepath.Join(home, ".rmt")
+	return root, validateRoot(root)
+}
+
+// validateRoot checks existing user storage before opening its files.
+func validateRoot(root string) error {
+	if info, err := os.Lstat(root); err == nil {
+		owner, ok := info.Sys().(*syscall.Stat_t)
+		if !info.IsDir() || info.Mode().Perm()&0077 != 0 || !ok || owner.Uid != uint32(os.Getuid()) {
+			return fmt.Errorf("%s must be an owner-only directory owned by this user", root)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 // Dir returns ~/.rmt, which holds settings, identity, device and host files flat.

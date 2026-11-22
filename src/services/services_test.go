@@ -2,12 +2,68 @@ package services
 
 import (
 	"encoding/xml"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 )
+
+// TestFirstUseLeavesSeparatelyManagedHostAlone avoids duplicate registration under a different label.
+func TestFirstUseLeavesSeparatelyManagedHostAlone(t *testing.T) {
+	// Unix socket paths are short on macOS, so keep this fixture relative to the default temp directory.
+	home, err := os.MkdirTemp("", "rmt-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(home)
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	if err := os.Mkdir(filepath.Join(home, ".rmt"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	l, err := net.Listen("unix", filepath.Join(home, ".rmt", "host.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	if err := EnableOnFirstUse(); err != nil {
+		t.Fatal(err)
+	}
+	if err := Enable(); err == nil || !strings.Contains(err.Error(), "already set up") {
+		t.Fatalf("explicit enable = %v", err)
+	}
+	file, err := definitionPath(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(file); !os.IsNotExist(err) {
+		t.Fatalf("unexpected service definition: %v", err)
+	}
+}
+
+// TestFirstUseLeavesLegacyMacDefinitionAlone covers a legacy agent that is not currently listening.
+func TestFirstUseLeavesLegacyMacDefinitionAlone(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("legacy LaunchAgent is macOS-only")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	agents := filepath.Join(home, "Library", "LaunchAgents")
+	if err := os.MkdirAll(agents, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agents, "com.fschr.rmt.plist"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnableOnFirstUse(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(agents, "com.rmt.host.plist")); !os.IsNotExist(err) {
+		t.Fatalf("unexpected second service definition: %v", err)
+	}
+}
 
 // TestFirstUseLeavesExistingHostAlone verifies that connecting cannot re-register a service.
 func TestFirstUseLeavesExistingHostAlone(t *testing.T) {

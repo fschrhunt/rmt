@@ -18,6 +18,8 @@ production client, shell and program handlers. They check:
   close releases the hosted shell even if it was running a command.
 - Native aliases are routed as part of command submission, while ordinary aliases still run
   on the host.
+- A paired PTY command receives Unicode input and resize and interrupt events, forwards ANSI
+  output unchanged, and returns to the same persistent shell without dropping its directory.
 - An interrupt sent by the client reaches a ready child command, returns its trapped exit
   status, and leaves the same shell and its environment usable.
 - OpenCode streams HTTP output through both authenticated bridges, translates the startup
@@ -62,8 +64,8 @@ instrumentation and are not run by `./x check`.
 The native fixtures validate rmt's bridge contracts, not compatibility with an installed
 OpenCode or Codex release or a real TUI. Terminal rendering, resizing and signal handling belong
 to the native interface and still need manual checks in a real terminal on macOS and Linux.
-Ordinary remote shell commands have no PTY or resize protocol. Real device sleep/wake, host
-crashes/restarts, VPN changes, WAN latency and native application recovery remain unvalidated
+The PTY fixture checks the transport, not what every terminal emulator draws. Real device
+sleep/wake, host crashes/restarts, VPN changes, WAN latency and native application recovery remain unvalidated
 by these loopback tests.
 
 For a terminal-close check, open an rmt prompt in a disposable tab and close the tab without

@@ -33,6 +33,11 @@ func privateDir(dir string) error {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
+	return checkPrivateDir(dir)
+}
+
+// checkPrivateDir validates existing storage without creating it.
+func checkPrivateDir(dir string) error {
 	info, err := os.Lstat(dir)
 	if err != nil {
 		return err

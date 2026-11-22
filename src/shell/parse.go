@@ -10,20 +10,11 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
-// Command describes a local native application, a host command, or an unsupported interactive app.
+// Command describes a native application or a command for the host shell.
 type Command struct {
-	Program     string
-	Alias       string
-	Unsupported string
-	Exit        bool
-}
-
-// interactive lists programs that need a full remote terminal, which rmt does not provide.
-var interactive = map[string]bool{
-	"vi": true, "vim": true, "nvim": true, "nano": true, "emacs": true, "less": true, "more": true,
-	"top": true, "htop": true, "btop": true, "man": true, "tmux": true, "screen": true,
-	"ssh": true, "mosh": true, "sftp": true,
-	"claude": true, "pi": true,
+	Program string
+	Alias   string
+	Exit    bool
 }
 
 // literal returns a shell word only when it does not need host-side expansion.
@@ -47,7 +38,7 @@ func literal(w *syntax.Word) (string, bool) {
 	return value, err == nil
 }
 
-// Parse intercepts supported native clients and refuses known interactive programs.
+// Parse intercepts only native clients; other programs run in the host shell.
 func Parse(line string, extra ...string) (Command, error) {
 	supported := func(name string) bool {
 		if name == "opencode" || name == "codex" {
@@ -63,11 +54,11 @@ func Parse(line string, extra ...string) (Command, error) {
 	parsed, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(line), "")
 	if err != nil {
 		// Let the host shell interpret syntax specific to its configured shell.
-		// Direct interactive launches must still pass the local routing checks.
+		// Direct native launches must still pass the local routing checks.
 		words := strings.Fields(line)
 		if len(words) > 0 {
 			name := filepath.Base(words[0])
-			if supported(name) || interactive[name] {
+			if supported(name) {
 				return Command{}, fmt.Errorf("invalid application command: %w", err)
 			}
 		}
@@ -76,7 +67,7 @@ func Parse(line string, extra ...string) (Command, error) {
 	if len(parsed.Stmts) == 0 {
 		return Command{}, nil
 	}
-	var unsupported, programName string
+	var programName string
 	syntax.Walk(parsed, func(node syntax.Node) bool {
 		call, ok := node.(*syntax.CallExpr)
 		if !ok || len(call.Args) == 0 {
@@ -99,7 +90,7 @@ func Parse(line string, extra ...string) (Command, error) {
 				}
 			}
 		}
-		// Common launch wrappers do not turn an interactive program into a supported one.
+		// Common launch wrappers must not accidentally run a native client on the host.
 		if name == "sudo" || name == "command" || name == "env" || name == "exec" {
 			for _, word := range call.Args[1:] {
 				v, ok := literal(word)
@@ -113,20 +104,11 @@ func Parse(line string, extra ...string) (Command, error) {
 				break
 			}
 		}
-		if interactive[name] && !supported(name) {
-			unsupported = name
-		}
 		if supported(name) {
 			programName = name
 		}
-		if (name == "python" || name == "python3" || name == "node" || name == "irb") && len(call.Args) == 1 {
-			unsupported = name
-		}
 		return true
 	})
-	if unsupported != "" {
-		return Command{Unsupported: unsupported}, nil
-	}
 	if programName != "" {
 		if len(parsed.Stmts) != 1 {
 			return Command{}, errors.New("run supported applications directly, not inside a compound command")

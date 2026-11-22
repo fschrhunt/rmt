@@ -26,8 +26,7 @@ var ErrSessionExpired = errors.New("shell session expired or unavailable")
 
 // ProgramRoute means the host did not execute the command: it resolved to a native or unsupported application.
 type ProgramRoute struct {
-	Program     string
-	Unsupported string
+	Program string
 }
 
 func (r *ProgramRoute) Error() string { return "host routed command to an application" }
@@ -53,12 +52,23 @@ type Shell struct {
 	available uint64
 	write     sync.Mutex
 	closing   bool
+	terminal  bool
 }
 
 // OpenShell connects to the selected host and returns its home directory.
 func OpenShell(host string) (*Shell, error) { return openShell(host, "", 0) }
 
+// OpenTerminalShell opens the usual prompt session with a PTY for submitted commands.
+func OpenTerminalShell(host, terminal string) (*Shell, error) {
+	return dialShell(host, "", 0, terminal)
+}
+
 func openShell(host, session string, after uint64) (*Shell, error) {
+	return dialShell(host, session, after, "")
+}
+
+// dialShell opens a fresh transport, optionally requesting a PTY for a new session.
+func dialShell(host, session string, after uint64, terminal string) (*Shell, error) {
 	target, err := resolveTarget(host)
 	if err != nil {
 		return nil, err
@@ -76,12 +86,14 @@ func openShell(host, session string, after uint64) (*Shell, error) {
 		return nil, errors.New("invalid host connection")
 	}
 	endpoint.Path = "/shell"
+	q := endpoint.Query()
 	if session != "" {
-		q := endpoint.Query()
 		q.Set("session", session)
 		q.Set("after", fmt.Sprint(after))
-		endpoint.RawQuery = q.Encode()
+	} else if terminal != "" {
+		q.Set("terminal", terminal)
 	}
+	endpoint.RawQuery = q.Encode()
 	wsClient := *target.client
 	wsClient.Timeout = 0
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
@@ -95,19 +107,19 @@ func openShell(host, session string, after uint64) (*Shell, error) {
 		if resp != nil && resp.StatusCode == http.StatusNotFound {
 			return nil, errors.New("host does not support the new prompt; update its rmt service")
 		}
-		return nil, fmt.Errorf("cannot connect to %s: %w", host, err)
+		return nil, dialError(host, target.base, err)
 	}
 	conn.SetReadLimit(1 << 20)
 	var event shell.Event
 	if err := wsjson.Read(ctx, conn, &event); err != nil {
 		conn.CloseNow()
 		target.client.CloseIdleConnections()
-		return nil, fmt.Errorf("host shell did not start: %w", err)
+		return nil, fmt.Errorf("connected to %s, but its shell did not start: %w", host, err)
 	}
 	if event.Type == "ready" && event.Version != shell.Version {
 		conn.CloseNow()
 		target.client.CloseIdleConnections()
-		return nil, fmt.Errorf("incompatible rmt protocol (host %d, client %d); update both machines", event.Version, shell.Version)
+		return nil, fmt.Errorf("incompatible rmt protocol (host %d, client %d); update both machines and restart the host service", event.Version, shell.Version)
 	}
 	if event.Type != "ready" || event.Directory == "" || event.Session == "" || (session != "" && (!event.Resumed || event.Session != session)) {
 		conn.CloseNow()
@@ -117,7 +129,7 @@ func openShell(host, session string, after uint64) (*Shell, error) {
 		}
 		return nil, errors.New("invalid host shell response")
 	}
-	return &Shell{host: host, base: target.base, home: event.Home, user: event.User, hostname: event.Host, conn: conn, client: target.client, directory: event.Directory, session: event.Session, sequence: after, running: event.Running, available: event.Sequence}, nil
+	return &Shell{host: host, base: target.base, home: event.Home, user: event.User, hostname: event.Host, conn: conn, client: target.client, directory: event.Directory, session: event.Session, sequence: after, running: event.Running, available: event.Sequence, terminal: event.Terminal}, nil
 }
 
 // ResumeShell reconnects a prompt to its existing shell and preserves its state.
@@ -193,22 +205,56 @@ func (s *Shell) Interrupt() {
 
 // Run streams one command's output and forwards Ctrl-C without replaying commands.
 func (s *Shell) Run(command string, output io.Writer) (int, error) {
-	return s.RunPrompt(command, "", nil, output)
+	return s.RunPrompt(command, "", nil, output, os.Stderr)
 }
 
 // RunPrompt optionally resolves an alias using the client's registered programs.
-func (s *Shell) RunPrompt(command, alias string, programs []string, output io.Writer) (int, error) {
+func (s *Shell) RunPrompt(command, alias string, programs []string, output, diagnostics io.Writer) (int, error) {
+	return s.runPrompt(command, alias, programs, output, diagnostics, nil)
+}
+
+// RunTerminal hands the local terminal to a remote command until it finishes.
+func (s *Shell) RunTerminal(command, alias string, programs []string, output, diagnostics io.Writer, input *os.File) (int, error) {
+	if !s.terminal {
+		return 0, errors.New("host did not open a terminal")
+	}
+	return s.runPrompt(command, alias, programs, output, diagnostics, input)
+}
+
+// runPrompt streams one command, enabling keyboard forwarding only after the host accepts it.
+func (s *Shell) runPrompt(command, alias string, programs []string, output, diagnostics io.Writer, input *os.File) (int, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	req := shell.Request{Type: "run", Command: command, Alias: alias, Programs: programs}
+	if input != nil {
+		req.Turn = s.sequence + 1
+		req.Size = terminalSize(input)
+	}
+	var stopInput func()
+	finishedTerminal := false
+	defer func() {
+		if stopInput != nil {
+			stopInput()
+			if !finishedTerminal {
+				// The app cannot restore its screen after losing the connection.
+				_, _ = io.WriteString(output, "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[?1l\x1b[?1049l\x1b[?25h\x1b[0m")
+			}
+		}
+	}()
 	s.write.Lock()
 	if s.closing {
 		s.write.Unlock()
 		return 0, net.ErrClosed
 	}
-	err := wsjson.Write(ctx, s.conn, shell.Request{Type: "run", Command: command, Alias: alias, Programs: programs})
+	submitCtx, stopSubmit := context.WithTimeout(ctx, 8*time.Second)
+	err := wsjson.Write(submitCtx, s.conn, req)
+	stopSubmit()
 	s.write.Unlock()
 	if err != nil {
-		if e := s.recover(s.host, output); e != nil {
+		if input != nil {
+			return 0, fmt.Errorf("terminal connection lost; command was not replayed: %w", err)
+		}
+		if e := s.recover(s.host, diagnostics); e != nil {
 			return 0, &ConnectionError{Err: e}
 		}
 		if !s.running && s.available <= s.sequence {
@@ -236,7 +282,10 @@ func (s *Shell) RunPrompt(command, alias string, programs []string, output io.Wr
 	for {
 		var event shell.Event
 		if err := wsjson.Read(ctx, s.conn, &event); err != nil {
-			if e := s.recover(s.host, output); e != nil {
+			if input != nil {
+				return 0, fmt.Errorf("terminal connection lost; command was not replayed: %w", err)
+			}
+			if e := s.recover(s.host, diagnostics); e != nil {
 				return 0, &ConnectionError{Err: e}
 			}
 			if !s.running && s.available <= s.sequence {
@@ -251,19 +300,28 @@ func (s *Shell) RunPrompt(command, alias string, programs []string, output io.Wr
 			s.sequence = event.Sequence
 		}
 		switch event.Type {
+		case "terminal":
+			if input == nil || stopInput != nil {
+				return 0, errors.New("unexpected terminal handoff")
+			}
+			stopInput, err = s.forwardTerminal(input, req.Turn)
+			if err != nil {
+				return 0, err
+			}
 		case "gap":
-			fmt.Fprintln(output, "[rmt: some output was lost while disconnected]")
+			fmt.Fprintln(diagnostics, "[rmt: some output was lost while disconnected]")
 		case "output":
 			if _, err := output.Write(event.Data); err != nil {
 				return 0, err
 			}
 		case "done":
+			finishedTerminal = event.Status < 128
 			s.directory = event.Directory
 			return event.Status, nil
 		case "error":
 			return 0, fmt.Errorf("host shell: %s", event.Error)
 		case "program":
-			return 0, &ProgramRoute{Program: event.Program, Unsupported: event.Error}
+			return 0, &ProgramRoute{Program: event.Program}
 		default:
 			return 0, errors.New("invalid host shell response")
 		}
