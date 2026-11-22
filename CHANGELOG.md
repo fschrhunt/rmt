@@ -8,6 +8,8 @@ Written by each release, newest first; the same notes are on
 - Give ordinary commands a remote terminal from the usual prompt. Keyboard input, resize,
   and screen output work without a separate mode; OpenCode and Codex keep their native local UIs.
   Update both client and host for shell protocol 11.
+- Pair new hosts over SSH without prompts when `ssh <host>` reaches them, falling back to manual
+  verification otherwise. The host needs this version for SSH pairing.
 
 - Don't register a second background service when an rmt host is already running under a different
   service name.
