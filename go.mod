@@ -7,6 +7,6 @@ require (
 	github.com/chzyer/readline v1.5.1
 	github.com/coder/websocket v1.8.15
 	github.com/yuin/gopher-lua v1.1.2
-	golang.org/x/sys v0.49.0
+	golang.org/x/sys v0.50.0
 	mvdan.cc/sh/v3 v3.14.1
 )
