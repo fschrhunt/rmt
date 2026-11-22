@@ -1,6 +1,10 @@
 name: Release
 
-# A reviewed release can be dispatched from main or started by a maintainer-pushed tag.
+# Started by .github/release/release.sh with reviewed notes. CHANGELOG.md is an
+# output: the tag job adds the notes to it in a release commit on top of the
+# checked main commit, tags that commit, and opens a pull request that brings
+# the changelog to main. The tag push then builds and publishes the release
+# with the same notes.
 on:
   push:
     tags: ['v*']
@@ -14,8 +18,12 @@ on:
         description: Full SHA of the checked main commit
         required: true
         type: string
+      notes:
+        description: Release notes, as Markdown
+        required: true
+        type: string
       dry_run:
-        description: Verify packaging without tagging or publishing
+        description: Verify packaging and show the changelog without tagging or publishing
         type: boolean
         default: false
 
@@ -51,6 +59,7 @@ jobs:
           TAG: ${{ inputs.tag }}
           COMMIT: ${{ inputs.commit }}
           DRY_RUN: ${{ inputs.dry_run }}
+          NOTES: ${{ inputs.notes }}
         run: |
           set -euo pipefail
           [ "$GITHUB_REF" = refs/heads/main ] || { echo 'Dispatch releases from main.' >&2; exit 1; }
@@ -60,35 +69,39 @@ jobs:
             echo 'Main changed after the release was requested; check CI and retry.' >&2
             exit 1
           fi
-          awk -v tag="$TAG" '
-            /^## / { section = ($2 == tag); if (section) count++; next }
-            section && /[^[:space:]]/ { body = 1 }
-            END { exit !(count == 1 && body) }
-          ' CHANGELOG.md || { echo 'Missing or empty changelog section.' >&2; exit 1; }
           result=$(gh run list --workflow ci.yml --branch main --event push --commit "$COMMIT" \
             --json status,conclusion --jq '.[0] | "\(.status) \(.conclusion)"')
           [ "$result" = 'completed success' ] || { echo 'CI has not passed for this main commit.' >&2; exit 1; }
           git show-ref --verify --quiet "refs/tags/$TAG" && { echo 'Release tag already exists.' >&2; exit 1; }
+          printf '%s\n' "$NOTES" > "$RUNNER_TEMP/notes.md"
+          grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md" || { echo 'The release notes are empty.' >&2; exit 1; }
+          .github/release/changelog.sh "$TAG" "$RUNNER_TEMP/notes.md"
+          git diff
           if [ "$DRY_RUN" = true ]; then
             .github/release/package.sh "$TAG" "$RUNNER_TEMP/dist"
             .github/release/formula.sh "$TAG" "$RUNNER_TEMP/dist/checksums.txt" > "$RUNNER_TEMP/rmt.rb"
             ruby -c "$RUNNER_TEMP/rmt.rb"
             exit 0
           fi
-      - name: Push the release tag
+      # The release token's pushes start workflows: the tag push builds and
+      # publishes the release, and the branch push runs CI for its pull request.
+      - name: Commit the changelog, tag it, and propose it for main
         if: ${{ !inputs.dry_run }}
         env:
           RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           TAG: ${{ inputs.tag }}
-          COMMIT: ${{ inputs.commit }}
         run: |
           set -euo pipefail
           [ -n "$RELEASE_TOKEN" ] || { echo 'Set RELEASE_TOKEN in repository Actions secrets.' >&2; exit 1; }
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git tag -a "$TAG" -m "$TAG" "$COMMIT"
+          git -c core.hooksPath=/dev/null commit -qm "release: $TAG" -- CHANGELOG.md
+          git tag -a "$TAG" -m "$TAG"
+          branch="release/$TAG"
           GH_TOKEN="$RELEASE_TOKEN" git -c credential.helper= -c 'credential.helper=!gh auth git-credential' \
-            push origin "refs/tags/$TAG"
+            push origin "refs/tags/$TAG" "HEAD:refs/heads/$branch"
+          GH_TOKEN="$RELEASE_TOKEN" gh pr create --base main --head "$branch" --title "release: $TAG" \
+            --body "Adds the $TAG notes to CHANGELOG.md. The $TAG tag already points at this commit; merge after CI passes."
 
   check:
     if: github.event_name == 'push'
@@ -103,6 +116,8 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 0
+      # A release tag points at its release commit: one commit on top of main
+      # that only adds the release's notes to CHANGELOG.md.
       - name: Validate tag and changelog
         env:
           TAG: ${{ github.ref_name }}
@@ -111,8 +126,12 @@ jobs:
             echo "Expected a stable semantic version tag vX.Y.Z without leading zeros: $TAG" >&2
             exit 1
           }
-          git merge-base --is-ancestor HEAD origin/main || {
-            echo "$TAG is not on main" >&2
+          git merge-base --is-ancestor HEAD^ origin/main || {
+            echo "$TAG is not a release commit on top of main" >&2
+            exit 1
+          }
+          [ "$(git diff --name-only HEAD^ HEAD)" = CHANGELOG.md ] || {
+            echo "The $TAG release commit may only change CHANGELOG.md" >&2
             exit 1
           }
           awk -v tag="$TAG" '
@@ -127,7 +146,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          commit=$(git rev-parse HEAD)
+          commit=$(git rev-parse HEAD^)
           result=$(gh run list --workflow ci.yml --branch main --event push --commit "$commit" \
             --json status,conclusion --jq '.[0] | "\(.status) \(.conclusion)"')
           [ "$result" = 'completed success' ] || {
@@ -178,7 +197,7 @@ jobs:
             dist/rmt_${{ github.ref_name }}_linux_amd64.tar.gz
             dist/rmt_${{ github.ref_name }}_linux_arm64.tar.gz
             dist/checksums.txt
-      - name: Publish release with changelog notes
+      - name: Publish release with the changelog's notes
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
@@ -214,7 +233,7 @@ jobs:
         run: |
           set -euo pipefail
           [ -n "$RELEASE_TOKEN" ] || { echo 'Set RELEASE_TOKEN in repository Actions secrets.' >&2; exit 1; }
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          git merge-base --is-ancestor "$GITHUB_SHA^" origin/main
           latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
           [ "$TAG" = "$latest" ] || { echo 'A newer release exists; skipping the formula.'; exit 0; }
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern checksums.txt --output "$RUNNER_TEMP/checksums.txt"

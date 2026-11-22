@@ -18,7 +18,7 @@ checkout. Rebuilding does not restart an installed host service.
 [AGENTS.md](AGENTS.md) for the package map and development conventions.
 
 Tests should protect meaningful behavior and run offline. Never include credentials, prompts,
-or other private data in issue reports. Update the README and changelog when behavior changes.
+or other private data in issue reports. Update the README when behavior changes; release notes are written when releasing.
 
 Dependabot opens one weekly pull request for dependency and GitHub Actions updates. Review changes and required checks before merging.
 
@@ -30,21 +30,22 @@ Redact private paths, prompts, tokens, and other sensitive details before sharin
 From a clean, up-to-date `main` checkout with Git and authenticated `gh`, run:
 
 ```sh
-.github/release/release.sh v1.2.3  # opens a PR to name the Unreleased changelog section
-.github/release/release.sh --dry-run v1.2.3  # after merging: verify archives and formula without publishing
-.github/release/release.sh v1.2.3  # after merging and updating main: requests the release
+.github/release/release.sh --dry-run v1.2.3  # verify archives and formula, show the changelog; publishes nothing
+.github/release/release.sh v1.2.3            # write the notes, then release
 ```
 
-The helper keeps the checkout on main, requires passing CI on its exact commit, and asks Actions
-to create the tag. Actions checks that main has not moved, validates the notes and CI again,
-and pushes the tag using `RELEASE_TOKEN`. A maintainer can also push a valid tag directly.
-After publishing, the workflow installs the release on macOS and Linux and checks `rmt --version`
+The helper drafts the notes from the pull requests merged since the last release and opens them
+in your editor; what you save is published. It requires passing CI on the exact `main` commit
+and asks Actions to release it. Actions checks that main has not moved and CI again, adds the
+notes to `CHANGELOG.md` in a release commit on top of that main commit, and pushes the tag at it
+using `RELEASE_TOKEN`, with a `release/v1.2.3` pull request that brings the changelog to `main`;
+merge it after CI passes. `CHANGELOG.md` is never edited by hand. After publishing, the workflow installs the release on macOS and Linux and checks `rmt --version`
 before proposing the Homebrew update.
 
 Use a new stable semantic version with no leading zeros; prerelease and build suffixes are not
-supported. The [release workflow](.github/workflows/release.yml) rejects tags outside `main`'s
-history, commits without passing main CI, missing or duplicate changelog sections, and empty notes,
-then runs `./x check`.
+supported. The [release workflow](.github/workflows/release.yml) rejects tags that aren't a release commit
+on top of `main` (changing only `CHANGELOG.md`), commits without passing main CI, and missing or
+duplicate changelog sections, then runs `./x check`.
 It builds `rmt_vX.Y.Z_{darwin,linux}_{amd64,arm64}.tar.gz`, each containing an executable `rmt`
 and `LICENSE`, and verifies their contents, build targets, and `checksums.txt` before publishing
 a GitHub release with that version's changelog notes using the automatic `GITHUB_TOKEN`.
@@ -53,8 +54,8 @@ CI and releases use `.github/release/package.sh`; from the repository root, run
 four archives without publishing. Release preparation and formula helpers also
 live in `.github/release/`; `./x shell` includes those scripts in ShellCheck.
 The release workflow attests the four archives and `checksums.txt` using GitHub provenance.
-The tag and formula jobs use the repository's `RELEASE_TOKEN` Actions secret to create the tag
-and open a PR containing `rmt.rb`; review and merge that PR after CI passes. The token needs access to this repository
+The tag and formula jobs use the repository's `RELEASE_TOKEN` Actions secret to push the tag
+and changelog branch and open PRs, including one containing `rmt.rb`; review and merge that PR after CI passes. The token needs access to this repository
 with Contents and Pull requests read/write. Keep it in GitHub Actions secrets, never in the
 repository. The formula job skips older releases and refuses to overwrite an existing release
 branch; if a retry reports an existing branch, inspect that branch and PR before changing it.
