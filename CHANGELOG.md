@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Give ordinary commands a remote terminal from the usual prompt. Keyboard input, resize,
+  and screen output work without a separate mode; OpenCode and Codex keep their native local UIs.
+  Update both client and host for shell protocol 11.
+
+- Don't register a second background service when an rmt host is already running under a different
+  service name.
+- Add read-only `rmt status` for local hosting and known hosts. Clarify connection and native
+  launch errors, and keep rmt's prompts and diagnostics out of piped stdout.
+- Highlight shell input locally, make bare `clear` clear the screen, and complete escaped paths
+  and symlinks to directories.
+
 ## v0.1.1 - 2026-11-22
 
 - Upgrade both the client and host to use shell protocol 10. Replacing an installed binary

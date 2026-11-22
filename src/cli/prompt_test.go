@@ -86,6 +86,21 @@ func TestRemoteCompleterAtCursor(t *testing.T) {
 	}
 }
 
+// TestRemoteCompleterContinuesEscapedPath checks a second completion inside a directory with spaces.
+func TestRemoteCompleterContinuesEscapedPath(t *testing.T) {
+	caller := remoteCompleter(func(prefix string) ([]string, error) {
+		if prefix != "~/my dir/fi" {
+			t.Fatalf("prefix = %q", prefix)
+		}
+		return []string{"~/my dir/file name"}, nil
+	})
+	line := []rune(`cat ~/my\ dir/fi`)
+	candidates, offset := caller.Do(line, len(line))
+	if len(candidates) != 1 || string(candidates[0]) != `le\ name` || offset != len(`~/my\ dir/fi`) {
+		t.Fatalf("candidates = %q, offset = %d", candidates, offset)
+	}
+}
+
 // TestPromptText keeps host paths from changing terminal state or adding lines.
 func TestPromptText(t *testing.T) {
 	if got := promptLabel("mini", "/home/me", "/home/me/a\nb\x1b"); got != "mini ~/a�b�: " {

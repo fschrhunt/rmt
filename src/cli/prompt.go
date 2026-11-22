@@ -20,6 +20,7 @@ import (
 	"github.com/fschrhunt/rmt/src/config"
 	"github.com/fschrhunt/rmt/src/extensions"
 	"github.com/fschrhunt/rmt/src/shell"
+	"mvdan.cc/sh/v3/syntax"
 )
 
 const (
@@ -210,13 +211,8 @@ func (c remoteCompleter) Do(line []rune, pos int) ([][]rune, int) {
 	if pos < 0 || pos > len(line) {
 		return nil, 0
 	}
-	head := line[:pos]
-	start := len(head)
-	for start > 0 && head[start-1] != ' ' && head[start-1] != '\t' {
-		start--
-	}
-	prefix := string(head[start:])
-	if strings.ContainsAny(prefix, "\\\"'`$*?[]{};|&<>()") {
+	prefix, typed, ok := completionPrefix(line[:pos])
+	if !ok {
 		return nil, 0
 	}
 	matches, err := c(prefix)
@@ -226,15 +222,49 @@ func (c remoteCompleter) Do(line []rune, pos int) ([][]rune, int) {
 	var candidates [][]rune
 	for _, match := range matches {
 		escaped := escapeCompletion(match)
-		if escaped == "" || !strings.HasPrefix(escaped, prefix) {
+		if escaped == "" || !strings.HasPrefix(escaped, typed) {
 			continue
 		}
-		candidates = append(candidates, []rune(escaped[len(prefix):]))
+		candidates = append(candidates, []rune(escaped[len(typed):]))
 	}
 	if len(candidates) == 0 {
 		return nil, 0
 	}
-	return candidates, len([]rune(prefix))
+	return candidates, len([]rune(typed))
+}
+
+// completionPrefix decodes the unquoted word at the cursor, including rmt's escaped filenames.
+func completionPrefix(head []rune) (prefix, typed string, ok bool) {
+	var decoded strings.Builder
+	var quote rune
+	start, plain := 0, true
+	for i := 0; i < len(head); i++ {
+		r := head[i]
+		switch {
+		case quote != 0:
+			if r == quote {
+				quote = 0
+			} else if r == '\\' && quote == '"' && i+1 < len(head) {
+				i++
+			}
+		case r == '\\':
+			if i+1 == len(head) || unicode.IsControl(head[i+1]) {
+				return "", "", false
+			}
+			i++
+			decoded.WriteRune(head[i])
+		case strings.ContainsRune("'\"`", r):
+			plain, quote = false, r
+		case strings.ContainsRune(" \t\n;|&<>()", r):
+			start, plain = i+1, true
+			decoded.Reset()
+		case unicode.IsControl(r) || strings.ContainsRune("$*?[]{}", r) || (r == '#' && i == start):
+			plain = false
+		default:
+			decoded.WriteRune(r)
+		}
+	}
+	return decoded.String(), string(head[start:]), plain && quote == 0
 }
 
 // gitCache keeps the last repository state and refreshes it without delaying input.
@@ -289,9 +319,9 @@ func (c *gitCache) get(directory string) (shell.Git, bool) {
 }
 
 // prompt edits input locally and sends ordinary commands to the connected shell.
-func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Writer, registry *extensions.Registry) error {
+func prompt(name string, remote *client.Shell, input *bufio.Reader, output, diagnostics io.Writer, registry *extensions.Registry, interactive bool) error {
 	t := stockTheme()
-	terminal := os.Getenv("TERM") != "dumb" && readline.IsTerminal(int(os.Stdin.Fd())) && readline.IsTerminal(int(os.Stdout.Fd()))
+	terminal := interactive && terminalType() != ""
 	if cfg, err := config.Load(); terminal && err == nil && cfg.Prompt.Style == "inherit" {
 		t = themeFromStyle(localStyle())
 	}
@@ -300,7 +330,6 @@ func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Wr
 		home = remote.Directory()
 	}
 	programs := registry.Programs()
-	supported := strings.Join(append([]string{"opencode", "codex"}, programs...), ", ")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var remoteMu sync.Mutex
@@ -353,14 +382,19 @@ func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Wr
 	var editor *readline.Instance
 	var completion completionCache
 	if terminal {
-		editor, _ = readline.NewEx(&readline.Config{
+		cfg := &readline.Config{
+			Stdin:  readline.NewCancelableStdin(terminalEditorInput{os.Stdin}),
 			Prompt: renderPrompt(0, t, true),
 			AutoComplete: remoteCompleter(func(prefix string) ([]string, error) {
 				return completion.lookup(ctx, remote, remote.Directory(), prefix), nil
 			}),
 			InterruptPrompt: "^C",
 			EOFPrompt:       "\n",
-		})
+		}
+		if _, disabled := os.LookupEnv("NO_COLOR"); !disabled {
+			cfg.Painter = inputPainter{syntax.NewParser(syntax.Variant(syntax.LangZsh), syntax.KeepComments(true))}
+		}
+		editor, _ = readline.NewEx(cfg)
 		if editor != nil {
 			defer editor.Close()
 		}
@@ -390,14 +424,18 @@ func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Wr
 				continue
 			}
 		} else {
-			fmt.Fprint(output, promptLabel(name, home, dir))
+			if interactive {
+				fmt.Fprint(output, promptLabel(name, home, dir))
+			}
 			line, err = input.ReadString('\n')
 			if errors.Is(err, io.EOF) && line != "" {
 				err = nil
 			}
 		}
 		if errors.Is(err, io.EOF) {
-			fmt.Fprintln(output, "[rmt is exiting]")
+			if interactive {
+				fmt.Fprintln(output, "[rmt is exiting]")
+			}
 			return nil
 		}
 		if err != nil {
@@ -408,20 +446,23 @@ func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Wr
 			continue
 		}
 		completion.clear()
+		// A bare clear operates on the local terminal, not the host's non-terminal shell.
+		if terminal && strings.TrimSpace(line) == "clear" {
+			fmt.Fprint(output, "\x1b[H\x1b[2J")
+			status, duration = 0, 0
+			continue
+		}
 		cmd, err := shell.Parse(line, programs...)
 		if err != nil {
 			status, duration = 1, 0
-			fmt.Fprintln(output, "rmt:", err)
+			fmt.Fprintln(diagnostics, "rmt:", err)
 			continue
 		}
 		if cmd.Exit {
-			fmt.Fprintln(output, "[rmt is exiting]")
+			if interactive {
+				fmt.Fprintln(output, "[rmt is exiting]")
+			}
 			return nil
-		}
-		if cmd.Unsupported != "" {
-			status, duration = 1, 0
-			fmt.Fprintf(output, "rmt: %s is not supported. Supported applications: %s.\n", cmd.Unsupported, supported)
-			continue
 		}
 		start := time.Now()
 		if cmd.Program == "" {
@@ -429,18 +470,22 @@ func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Wr
 			if cmd.Alias != "" {
 				aliasPrograms = programs
 			}
-			status, err = remote.RunPrompt(line, cmd.Alias, aliasPrograms, output)
+			if terminal {
+				status, err = remote.RunTerminal(line, cmd.Alias, aliasPrograms, output, diagnostics, os.Stdin)
+			} else {
+				status, err = remote.RunPrompt(line, cmd.Alias, aliasPrograms, output, diagnostics)
+			}
 			var route *client.ProgramRoute
 			if errors.As(err, &route) {
-				if route.Unsupported != "" {
-					status, duration = 1, 0
-					fmt.Fprintf(output, "rmt: %s is not supported. Supported applications: %s.\n", route.Unsupported, supported)
-					continue
-				}
 				cmd.Program = route.Program
 			}
 		}
 		if cmd.Program != "" {
+			if !interactive {
+				fmt.Fprintf(diagnostics, "rmt: %s needs an interactive terminal\n", cmd.Program)
+				status, duration = 1, 0
+				continue
+			}
 			signals := make(chan os.Signal, 1)
 			signal.Notify(signals, os.Interrupt)
 			launchMu.Lock()
@@ -461,10 +506,10 @@ func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Wr
 				return nil
 			}
 			status = 1
-			fmt.Fprintln(output, "rmt:", err)
 			var lost *client.ConnectionError
 			if cmd.Program == "" && errors.As(err, &lost) {
-				next, e := reconnect(name, remote, output)
+				fmt.Fprintln(diagnostics, "rmt:", err)
+				next, e := reconnect(name, remote, diagnostics)
 				if e != nil {
 					return e
 				}
@@ -482,7 +527,25 @@ func prompt(name string, remote *client.Shell, input *bufio.Reader, output io.Wr
 			if cmd.Program == "" {
 				return err
 			}
+			fmt.Fprintln(diagnostics, "rmt:", err)
 		}
 		refreshGit()
 	}
 }
+
+// terminalType advertises the terminal emulator to the host; dumb terminals use the pipe path.
+func terminalType() string {
+	switch term := os.Getenv("TERM"); term {
+	case "dumb":
+		return ""
+	case "":
+		return "xterm"
+	default:
+		return term
+	}
+}
+
+// terminalEditorInput prevents readline from reading across the prompt-to-app boundary.
+type terminalEditorInput struct{ io.Reader }
+
+func (r terminalEditorInput) Read(b []byte) (int, error) { return r.Reader.Read(b[:min(len(b), 1)]) }

@@ -23,7 +23,7 @@ import (
 )
 
 // Run starts the configured host and its native program backends.
-func Run() error {
+func Run(version string) error {
 	cfg, e := config.Load()
 	if e != nil {
 		return e
@@ -65,7 +65,7 @@ func Run() error {
 			return fmt.Errorf("listen on %s: %w", cfg.Listen, err)
 		}
 		defer direct.Close()
-		if err := paired.StartLocal(); err != nil {
+		if err := paired.StartLocal(network.HostStatus{Version: version, Listen: direct.Addr().String()}); err != nil {
 			return fmt.Errorf("paired host control: %w", err)
 		}
 		defer paired.Close()

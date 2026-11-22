@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/http"
+	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
+	"github.com/creack/pty"
 	"github.com/fschrhunt/rmt/src/config"
 	"github.com/fschrhunt/rmt/src/extensions"
 	"github.com/fschrhunt/rmt/src/network"
@@ -48,6 +51,8 @@ type shellSession struct {
 	size                      int
 	sequence                  uint64
 	delivered                 uint64
+	turn                      uint64
+	terminalCommand           bool
 	ctx                       context.Context
 	cancel                    context.CancelFunc
 	proxying                  int
@@ -104,7 +109,7 @@ func (s *shellSession) notifyLocked() {
 	s.changed = make(chan struct{})
 }
 
-// stop removes a shell and lets commands already running in it finish.
+// stop removes a shell, hanging up a PTY or letting non-terminal commands drain.
 func (m *shellSessions) stop(s *shellSession) {
 	m.mu.Lock()
 	if m.sessions[s.token] != s {
@@ -191,6 +196,11 @@ func (m *shellSessions) Close() {
 
 // acquire creates a shell or resumes one belonging to the same paired device.
 func (m *shellSessions) acquire(token, owner string) (*shellSession, bool, error) {
+	return m.acquireTerminal(token, owner, "")
+}
+
+// acquireTerminal creates or resumes the requested shell without changing its terminal type.
+func (m *shellSessions) acquireTerminal(token, owner, terminal string) (*shellSession, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if token != "" {
@@ -218,7 +228,7 @@ func (m *shellSessions) acquire(token, owner string) (*shellSession, bool, error
 	if _, err := rand.Read(secret[:]); err != nil {
 		return nil, false, err
 	}
-	sh, err := newCommandShell(m.home, m.shellPath)
+	sh, err := openCommandShell(m.home, m.shellPath, terminal)
 	if err != nil {
 		return nil, false, err
 	}
@@ -234,6 +244,11 @@ func (m *shellSessions) detach(s *shellSession) {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
+		return
+	}
+	if s.terminalCommand {
+		s.mu.Unlock()
+		m.stop(s)
 		return
 	}
 	s.attached = false
@@ -262,6 +277,8 @@ func (m *shellSessions) detach(s *shellSession) {
 	}
 }
 
+var terminalName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.+-]{0,63}$`)
+
 // ServeHTTP attaches an authenticated device to its persistent command shell.
 func (m *shellSessions) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	owner := network.DeviceKey(r.Context())
@@ -271,7 +288,12 @@ func (m *shellSessions) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid sequence", 400)
 		return
 	}
-	s, resumed, err := m.acquire(token, owner)
+	terminal := r.URL.Query().Get("terminal")
+	if terminal != "" && !terminalName.MatchString(terminal) {
+		http.Error(w, "invalid terminal type", http.StatusBadRequest)
+		return
+	}
+	s, resumed, err := m.acquireTerminal(token, owner, terminal)
 	if err != nil {
 		status := http.StatusConflict
 		if errors.Is(err, errSessionUnavailable) {
@@ -291,15 +313,20 @@ func (m *shellSessions) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	defer context.AfterFunc(s.ctx, cancel)()
 	s.mu.Lock()
-	ready := shell.Event{Type: "ready", Version: shell.Version, Session: s.token, Directory: s.directory, Home: m.home, User: m.user, Host: m.hostname, Resumed: resumed, Running: s.running, Sequence: s.sequence}
+	ready := shell.Event{Type: "ready", Version: shell.Version, Session: s.token, Directory: s.directory, Home: m.home, User: m.user, Host: m.hostname, Resumed: resumed, Running: s.running, Sequence: s.sequence, Terminal: s.sh.control != nil}
 	s.mu.Unlock()
-	if wsjson.Write(ctx, c, ready) != nil {
+	readyCtx, stopReady := context.WithTimeout(ctx, 5*time.Second)
+	err = wsjson.Write(readyCtx, c, ready)
+	stopReady()
+	if err != nil {
 		m.detach(s)
 		return
 	}
 	writerDone := make(chan struct{})
 	go func() {
 		defer close(writerDone)
+		heartbeat := time.NewTicker(15 * time.Second)
+		defer heartbeat.Stop()
 		cursor := after
 		for {
 			s.mu.Lock()
@@ -321,6 +348,7 @@ func (m *shellSessions) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				next = s.events[cursor+1-s.events[0].Sequence]
 			}
 			changed := s.changed
+			activeTerminal := s.terminalCommand
 			s.mu.Unlock()
 			if next.Sequence != 0 {
 				writeCtx, stop := context.WithTimeout(ctx, 15*time.Second)
@@ -343,6 +371,16 @@ func (m *shellSessions) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			case <-changed:
 			case <-ctx.Done():
 				return
+			case <-heartbeat.C:
+				if activeTerminal {
+					pingCtx, stop := context.WithTimeout(ctx, 5*time.Second)
+					err := c.Ping(pingCtx)
+					stop()
+					if err != nil {
+						cancel()
+						return
+					}
+				}
 			}
 		}
 	}()
@@ -373,6 +411,7 @@ func (m *shellSessions) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			s.running = true
+			s.terminalCommand = req.Turn != 0 && s.sh.control != nil
 			s.mu.Unlock()
 			go func(req shell.Request) {
 				event, dir := m.run(s, req)
@@ -380,6 +419,8 @@ func (m *shellSessions) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				if dir != "" {
 					s.directory = dir
 				}
+				s.turn = 0
+				s.terminalCommand = false
 				s.addLocked(event)
 				s.running = false
 				orphaned := s.orphaned
@@ -388,6 +429,12 @@ func (m *shellSessions) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					m.stop(s)
 				}
 			}(req)
+		case "input", "resize":
+			if err := s.terminalInput(req); err != nil {
+				// Do not leave a foreground app alive after the terminal stream fails.
+				graceful = true
+				return
+			}
 		case "interrupt":
 			s.mu.Lock()
 			if s.running || s.starting {
@@ -401,6 +448,35 @@ func (m *shellSessions) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+// terminalInput ignores late keys from a previous command and bounds stalled PTY writes.
+func (s *shellSession) terminalInput(req shell.Request) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.turn == 0 || req.Turn != s.turn {
+		return nil
+	}
+	if req.Type == "resize" {
+		return resizeTerminal(s.sh.output, req.Size)
+	}
+	if len(req.Data) > 16<<10 {
+		return errors.New("terminal input is too large")
+	}
+	if err := s.sh.output.SetWriteDeadline(time.Now().Add(time.Second)); err != nil {
+		return err
+	}
+	_, err := s.sh.output.Write(req.Data)
+	_ = s.sh.output.SetWriteDeadline(time.Time{})
+	return err
+}
+
+// resizeTerminal applies nonzero screen dimensions; the kernel signals foreground applications.
+func resizeTerminal(tty *os.File, size shell.Size) error {
+	if size.Rows == 0 || size.Cols == 0 {
+		return nil
+	}
+	return pty.Setsize(tty, &pty.Winsize{Rows: size.Rows, Cols: size.Cols})
 }
 
 // run resolves a requested alias locally on the host and runs only ordinary commands in the shell.
@@ -417,11 +493,29 @@ func (m *shellSessions) run(s *shellSession, req shell.Request) (shell.Event, st
 		if err != nil {
 			return shell.Event{Type: "error", Error: err.Error()}, ""
 		}
-		if cmd := shell.AliasCommand(aliases.String(), req.Alias, req.Programs...); cmd.Program != "" || cmd.Unsupported != "" {
-			return shell.Event{Type: "program", Program: cmd.Program, Error: cmd.Unsupported}, ""
+		aliasOutput := strings.ReplaceAll(aliases.String(), "\r\n", "\n")
+		if cmd := shell.AliasCommand(aliasOutput, req.Alias, req.Programs...); cmd.Program != "" {
+			return shell.Event{Type: "program", Program: cmd.Program}, ""
 		}
 	}
-	dir, status, err := s.sh.Run(req.Command, func(data []byte) error {
+	interactive := req.Turn != 0 && s.sh.control != nil
+	if interactive {
+		if err := s.sh.resetTerminal(); err != nil {
+			return shell.Event{Type: "error", Error: err.Error()}, ""
+		}
+		if err := resizeTerminal(s.sh.output, req.Size); err != nil {
+			return shell.Event{Type: "error", Error: err.Error()}, ""
+		}
+		s.mu.Lock()
+		if s.closed {
+			s.mu.Unlock()
+			return shell.Event{}, ""
+		}
+		s.turn = req.Turn
+		s.addLocked(shell.Event{Type: "terminal"})
+		s.mu.Unlock()
+	}
+	dir, status, err := s.sh.run(req.Command, interactive, func(data []byte) error {
 		s.add(shell.Event{Type: "output", Data: append([]byte(nil), data...)})
 		return nil
 	})

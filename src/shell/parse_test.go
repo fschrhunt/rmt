@@ -4,13 +4,13 @@ import "testing"
 
 func TestParseRoutesProgramsWithoutChangingOrdinaryHostCommands(t *testing.T) {
 	cases := []struct {
-		line, program, unsupported string
-		bad, exit                  bool
+		line, program string
+		bad, exit     bool
 	}{
 		{line: `opencode --model 'hello world'`, program: "opencode"},
 		{line: `codex resume`, program: "codex"},
-		{line: `vim file`, unsupported: "vim"}, {line: `sudo /usr/bin/nvim file`, unsupported: "nvim"},
-		{line: `claude -w`, unsupported: "claude"}, {line: `pi -w`, unsupported: "pi"},
+		{line: `vim file`}, {line: `sudo /usr/bin/nvim file`},
+		{line: `claude -w`}, {line: `pi -w`},
 		{line: `ls -la | head`}, {line: `cd /tmp && pwd`}, {line: `printf '%s' "$HOME"`},
 		{line: `command -v codex`}, {line: `command -V opencode`},
 		{line: `print -l -- *(.N)`},
@@ -20,7 +20,7 @@ func TestParseRoutesProgramsWithoutChangingOrdinaryHostCommands(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.line, func(t *testing.T) {
 			got, err := Parse(tc.line)
-			if (err != nil) != tc.bad || got.Program != tc.program || got.Unsupported != tc.unsupported || got.Exit != tc.exit {
+			if (err != nil) != tc.bad || got.Program != tc.program || got.Exit != tc.exit {
 				t.Fatalf("got %+v, %v", got, err)
 			}
 		})
@@ -30,7 +30,7 @@ func TestParseRoutesProgramsWithoutChangingOrdinaryHostCommands(t *testing.T) {
 func TestParseRoutesExtensionProgram(t *testing.T) {
 	for _, name := range []string{"demo", "pi"} {
 		got, err := Parse(name+" --flag", name)
-		if err != nil || got.Program != name || got.Unsupported != "" {
+		if err != nil || got.Program != name {
 			t.Fatalf("%s: %+v %v", name, got, err)
 		}
 	}
@@ -50,7 +50,7 @@ func TestAliasCommand(t *testing.T) {
 	if got := AliasCommand("oc='echo opencode'\n", "oc"); got.Program != "" {
 		t.Fatalf("ordinary alias detected as a program: %+v", got)
 	}
-	if got := AliasCommand("cl=claude\n", "cl"); got.Unsupported != "claude" {
-		t.Fatalf("unsupported program alias: %+v", got)
+	if got := AliasCommand("cl=claude\n", "cl"); got.Program != "" {
+		t.Fatalf("remote terminal app was routed to a local program: %+v", got)
 	}
 }

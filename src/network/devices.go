@@ -135,8 +135,14 @@ func (h *Host) revoke(id string) error {
 	return nil
 }
 
-// StartLocal opens an owner-only Unix socket for generating codes and managing devices.
-func (h *Host) StartLocal() error {
+// HostStatus reports the running binary version and bound address over the private socket.
+type HostStatus struct {
+	Version string `json:"version"`
+	Listen  string `json:"listen"`
+}
+
+// StartLocal opens the owner-only socket for device management and status.
+func (h *Host) StartLocal(status HostStatus) error {
 	if err := privateDir(h.dir); err != nil {
 		return err
 	}
@@ -167,7 +173,13 @@ func (h *Host) StartLocal() error {
 	h.local = l
 	h.watchStop = make(chan struct{})
 	go h.watchDevices(h.watchStop)
-	h.server = &http.Server{ReadHeaderTimeout: 5 * time.Second, Handler: http.HandlerFunc(h.localControl)}
+	h.server = &http.Server{ReadHeaderTimeout: 5 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/status" {
+			_ = json.NewEncoder(w).Encode(status)
+			return
+		}
+		h.localControl(w, r)
+	})}
 	go func() { _ = h.server.Serve(l) }()
 	return nil
 }
@@ -226,7 +238,7 @@ func (h *Host) localControl(w http.ResponseWriter, r *http.Request) {
 
 // Control sends a management request over the owner's Unix socket.
 func Control(dir, method, path string, body io.Reader, out any) error {
-	if err := privateDir(dir); err != nil {
+	if err := checkPrivateDir(dir); err != nil {
 		return err
 	}
 	tr := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
